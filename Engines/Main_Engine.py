@@ -1,0 +1,262 @@
+from pathlib import Path
+import sys
+from dateutil.relativedelta import relativedelta
+import polars as pl
+from datetime import datetime as dt
+import pandas as pd
+
+
+MAIN_DIR = Path(__file__).resolve().parent.parent
+TRADING_DAYS_QUERY_NUM = 3
+FULL_DATA_QUERY_NUM = 1
+sys.path.append(str(MAIN_DIR))
+
+from Utilities.parameter_parser import _load_engine_main_entry_parameters
+from Utilities.parameter_parser import load_parameters_from_csv
+from Utilities.Yaml_Loader import LoadYamlfile
+from Utilities.Logger import Logger
+from Utilities.missing_date_handler import MissingDates
+from Utilities.clickhouse_connector import ClickHouse
+from Utilities.query_template_loader import QueryTemplateLoader
+from Utilities.Result_handler import ResultHolder
+from Utilities.Helper_functions import LotSize
+from Utilities.Helper_functions import OrderSequenceMapper
+from Utilities.SD_manager import SDManager
+from Utilities.Legs_generator import LegsHandler
+
+### Parameters Loading Section ###
+# param_csv_file = sys.argv[1]
+param_csv_file = 'D:/Development/Coding_Projects/market_project/old_backtest_engine/strategies/sm10_tgt_80_sl_10_inverse_leg5/entry_parameter_0121_1225_0916_1530_nifty.csv'
+param_csv_file_dir = ("/").join(param_csv_file.split("/")[:-1])
+entry_para_dict = _load_engine_main_entry_parameters(load_parameters_from_csv(param_csv_file))
+
+directional_processing = False
+consecutive_sl_counts = 2
+
+### Logger Configration ###
+log_class = Logger(log_path=MAIN_DIR/'logs')
+logger = log_class.setup_logger(name='Debug', log_file=f"{entry_para_dict['strategy_name']}_{entry_para_dict['indices']}.log")
+
+### YAML Loading ###
+config = LoadYamlfile(file_path=MAIN_DIR / 'settings' / 'config.yaml')
+
+###### Index Parameters #######
+entry_para_dict['base_symbol_spread'] = config.get('symbol_spread_mapping', entry_para_dict['indices'].lower())
+entry_para_dict['symbol_lotsize'] = config.get('symbol_lotsize_mapping', entry_para_dict['indices'].lower())
+
+### Setting Result Save Path ###
+result_save_dir = MAIN_DIR /  entry_para_dict['indices'].lower()
+result_save_dir.mkdir(parents=True, exist_ok=True)
+
+####### Getting Holiday and Event files ######
+holidays_path = MAIN_DIR / 'csv' / config.get('csv_files_configration', 'holidays_csv_filename')
+events_path = MAIN_DIR / 'csv' / config.get('csv_files_configration','event_csv_filename')
+
+###### Chargers static value #######
+charges_params_dict = config.get('charges_configration')
+charges_params_dict['gst_percentage'] = charges_params_dict["gst_percentage"]/100
+charges_params_dict['slippage_percentage'] = charges_params_dict["slippage_percentage"]/100
+
+
+####### Getting Holiday and Event files ######
+holidays_df = pl.read_csv(holidays_path)
+holidays_df = holidays_df = holidays_df.with_columns(pl.col("DATE").str.to_date("%d-%b-%y", strict=False).alias("DATE"))
+events_df = pl.read_csv(events_path, columns=["Date", "Event"]).with_columns(pl.col("Date").str.to_datetime("%d-%m-%Y").alias("Date"))
+
+
+### Missing dates class initialization ###
+miss_con = MissingDates()
+
+### Clickhouse object and client initialization ###
+clickhouse_details = config.get('clickhouse_database_params')
+clickhouse_obj = ClickHouse(host=clickhouse_details['host'],
+                            username=clickhouse_details['username'],
+                            password=clickhouse_details['password'],
+                            database_name=clickhouse_details['database_name'],
+                            port=clickhouse_details['port'])
+clickhouse_client = clickhouse_obj.get_client()
+
+
+#### initializing data extractor class ###
+query_loader = QueryTemplateLoader()
+
+
+
+
+##### loading all the trading dates #####
+db_initial_extraction_date = dt.strptime(entry_para_dict['start_date'], '%d/%m/%Y').strftime('%Y-%m-%d')
+db_end_extraction_date = dt.strptime(entry_para_dict['end_date'], '%d/%m/%Y').strftime('%Y-%m-%d')
+query = query_loader.get_template(TRADING_DAYS_QUERY_NUM, table_name=clickhouse_details['spot_table'])
+        
+parameters = {
+    "symbol": entry_para_dict['indices'].upper()+"50" if entry_para_dict['indices'] == "nifty" else entry_para_dict['indices'].upper(),
+    "start_date": db_initial_extraction_date,
+    "end_date": db_end_extraction_date
+}
+trading_days = [row[0] for row in clickhouse_client.query(query, parameters=parameters).result_rows]
+days_to_trade = []
+
+#### Loading full spot df ####
+query = query_loader.get_template(FULL_DATA_QUERY_NUM, table_name=clickhouse_details['spot_table'])
+spot_arrow = clickhouse_client.query_arrow(query, parameters=parameters)
+full_spot_df = pl.from_arrow(spot_arrow)
+if 'Timestamp' in full_spot_df.columns:
+    full_spot_df = full_spot_df.with_columns(pl.from_epoch("Timestamp", time_unit="s"))
+float_cols = [col for col, dtype in zip(full_spot_df.columns, full_spot_df.dtypes) if dtype in (pl.Float32, pl.Float64)]
+full_spot_df = full_spot_df.with_columns(pl.col(float_cols).cast(pl.Float64).round(2))
+
+
+
+### Querying VIX data from database ###
+parameters['symbol'] = "VIX"
+vix_arrow = clickhouse_client.query_arrow(query, parameters=parameters)
+full_vix_df = pl.from_arrow(vix_arrow)
+if 'Timestamp' in full_vix_df.columns:
+    full_vix_df = full_vix_df.with_columns(pl.from_epoch("Timestamp", time_unit="s"))
+float_cols = [col for col, dtype in zip(full_vix_df.columns, full_vix_df.dtypes) if dtype in (pl.Float32, pl.Float64)]
+full_vix_df = full_vix_df.with_columns(pl.col(float_cols).cast(pl.Float64).round(2))
+
+
+
+# Define minimum allowed start dates for each index
+min_start_dates = {
+    "banknifty": "01/11/2016",
+    "nifty": "01/03/2019",
+    "finnifty": "01/01/2023",
+    "sensex": "01/05/2023",
+    "bankex": "01/11/2023"
+}
+
+# Convert input dates to datetime objects
+start_dt = dt.strptime(entry_para_dict['start_date'], "%d/%m/%Y")
+end_date = dt.strptime(entry_para_dict['end_date'], "%d/%m/%Y")
+
+# Get minimum date for the index if defined
+min_date_str = min_start_dates.get(entry_para_dict['indices'].lower())
+if min_date_str:
+    min_dt = dt.strptime(min_date_str, "%d/%m/%Y")
+    if start_dt < min_dt:
+        start_dt = min_dt
+
+start_date = start_dt
+
+### Querying spot data from database ###
+prev_dates_to_fetch = dt.strptime(db_initial_extraction_date, "%Y-%m-%d") - relativedelta(days=5)
+prev_dates_to_fetch_str = dt.strftime(prev_dates_to_fetch, "%Y-%m-%d")
+query = query_loader.get_template(FULL_DATA_QUERY_NUM, table_name=clickhouse_details['spot_table'])
+parameters = {
+            "symbol": entry_para_dict['indices'].upper()+"50" if entry_para_dict['indices'] == "nifty" else entry_para_dict['indices'].upper(),
+            "start_date": prev_dates_to_fetch_str,
+            "end_date": db_initial_extraction_date
+        }
+
+
+prev_spot_required_data = clickhouse_client.query_df(query, parameters=parameters)
+prev_spot_required_data = prev_spot_required_data[prev_spot_required_data['Timestamp'].dt.date != dt.strptime(db_initial_extraction_date, "%Y-%m-%d").date()] = prev_spot_required_data[prev_spot_required_data['Timestamp'].dt.date != dt.strptime(db_initial_extraction_date, "%Y-%m-%d").date()]
+prev_day_close = prev_spot_required_data['Close'].iloc[-1]
+
+## Class which handles generated results ###
+result_holder_con = ResultHolder()
+legs_handler_con = LegsHandler()
+
+for current_date in trading_days:
+    # storing date both in str and datetime fi
+    current_date_str = dt.strftime(current_date, "%Y-%m-%d")
+    print("Processing date: ", current_date_str)
+    spot_df = full_spot_df.filter(pl.col("Timestamp").dt.date() == current_date)
+    spot_df = spot_df.filter((pl.col("Timestamp").dt.time() >= dt.strptime('09:15:00', "%H:%M:%S").time()) & (
+                pl.col("Timestamp").dt.time() <= dt.strptime('15:30:00', "%H:%M:%S").time()))
+    vix_df = full_vix_df.filter(pl.col("Timestamp").dt.date() == current_date)
+    vix_df = vix_df.filter((pl.col("Timestamp").dt.time() >= dt.strptime('09:15:00', "%H:%M:%S").time()) & (
+                pl.col("Timestamp").dt.time() <= dt.strptime('15:30:00', "%H:%M:%S").time()))
+
+    ########## lot Changes on the given day and nearest expiry calculation ###############
+    entry_para_dict['symbol_lotsize'] = LotSize.lotsize(current_date, entry_para_dict['indices'])
+    
+    if current_date.strftime("%A") == "Sunday" or current_date.strftime("%A") == "Saturday":
+        miss_con.missing_dict_update(current_date, f"Saturday/Sunday Occured")
+        continue
+
+    # Generate legs from CSV files using LegsHandler
+    # Smart reload: Only reloads if weekday-specific stoploss is present, otherwise uses cached data
+    orders, lazy_leg_dict, option_types, expiry_types, synthetic_checking = legs_handler_con.legs_generator(
+        param_csv_file_dir, 
+        current_date=current_date)
+
+    order_sequence_mapper_con = OrderSequenceMapper()
+    orders, lazy_leg_dict = order_sequence_mapper_con.legid_mapping(orders, lazy_leg_dict)
+
+    total_orders = len(orders)
+
+
+    if synthetic_checking:
+
+        logger.info(f"Rolling Straddle file not available for indice {entry_para_dict['indices']} on Timestamp {current_date}")
+        miss_con.missing_dict_update(current_date,
+                                     f"Rolling Straddle file not available for indice {entry_para_dict['indices']} on Timestamp {current_date}")
+        continue
+
+    else:
+        synthetic_df = pd.DataFrame()
+
+    ##### Margin Generation ######
+    total_multiple = max(option_types.count("CE"), option_types.count("PE"))
+
+    TRADE_DICT = {"leg_id": [],
+                  'Timestamp': [],
+                  'TradingSymbol': [],
+                  'Instrument_type': [],
+                  "SD": [],
+                  'SellPrice': [],
+                  'LTP': [],
+                  'PnL': [],
+                  'stop_loss': [],
+                  'target_price': [],
+                  'strike': [],
+                  'Position_type': [],
+                  'Trailing': []}
+
+    order_book = {'Timestamp': [],
+                  'Ticker': [],
+                  'Order_side': [],
+                  'Price': [],
+                  'Summary': []}
+
+    # Closed position dictionary
+    CLOSE_DICT = {'Timestamp': [],
+                  'TradingSymbol': [],
+                  'Instrument_type': [],
+                  "SD": [],
+                  'SellPrice': [],
+                  'LTP': [],
+                  'PnL': []}
+
+    entry_time = dt.strptime(f"{current_date_str}  {entry_para_dict['strategy_entry_time']}", "%Y-%m-%d %H:%M:%S")
+    exit_time = dt.strptime(f"{current_date_str}  {entry_para_dict['strategy_exit_time']}", "%Y-%m-%d %H:%M:%S")
+
+    # day_breaker flag
+    day_breaker = False
+    entry_spot = None
+    sd = None
+
+    ####### Breaking Day if Holiday Occur #######
+    if not holidays_df.filter(pl.col("DATE") == current_date).is_empty():
+        logger.info(f"{current_date} Holiday happened no trading day")
+        miss_con.missing_dict_update(current_date, "Holiday, no trading day")
+        day_breaker = True
+
+    ####### Saving Occured Event ########
+    event = "No Event"
+
+    ### Intraday Dataframe Dictionary Segregated by Expiry ###
+    intraday_df_dict = {"Weekly": [], "Next_Weekly": [], "Monthly": []}
+
+    ### Saving Directory Initializer ###
+    result_holder_con.strategy_save_path_initializer(result_save_dir, entry_para_dict['strategy_name'], total_orders, start_date, end_date, entry_time, exit_time)
+
+    ### SD Manager Initializer ###
+    sd_full_file = SDManager()
+
+    #### Flags for the Engine #####
+    initial_entry = False
+    overall_tp_activated = False

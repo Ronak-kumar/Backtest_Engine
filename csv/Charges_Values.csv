@@ -1,0 +1,2 @@
+nifty_slippage,banknifty_slippage,finnifty_slippage,nifty_next_50_slippage,bankex_slippage,sensex_slippage,brokerage,exchange_tc,sebi_tc,stt,stamp_duty,GST,nifty_freeze_qty,sensex_freeze_qty,banknifty_freeze_qty,finnifty_freeze_qty,bankex_freeze_qty
+0.25,0.5,0.25,0.25,0.5,0.5,7,0.00053,0.000002,0.000625,0.00003,18,1800,1000,900,1800,900

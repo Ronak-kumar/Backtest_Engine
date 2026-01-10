@@ -23,6 +23,7 @@ from Utilities.Helper_functions import LotSize
 from Utilities.Helper_functions import OrderSequenceMapper
 from Utilities.SD_manager import SDManager
 from Utilities.Legs_generator import LegsHandler
+from Utilities.Day_Processor import DayProcessor
 
 ### Parameters Loading Section ###
 # param_csv_file = sys.argv[1]
@@ -186,58 +187,14 @@ for current_date in trading_days:
     order_sequence_mapper_con = OrderSequenceMapper()
     orders, lazy_leg_dict = order_sequence_mapper_con.legid_mapping(orders, lazy_leg_dict)
 
-    total_orders = len(orders)
-
-
     if synthetic_checking:
-
         logger.info(f"Rolling Straddle file not available for indice {entry_para_dict['indices']} on Timestamp {current_date}")
         miss_con.missing_dict_update(current_date,
                                      f"Rolling Straddle file not available for indice {entry_para_dict['indices']} on Timestamp {current_date}")
         continue
-
     else:
         synthetic_df = pd.DataFrame()
 
-    ##### Margin Generation ######
-    total_multiple = max(option_types.count("CE"), option_types.count("PE"))
-
-    TRADE_DICT = {"leg_id": [],
-                  'Timestamp': [],
-                  'TradingSymbol': [],
-                  'Instrument_type': [],
-                  "SD": [],
-                  'SellPrice': [],
-                  'LTP': [],
-                  'PnL': [],
-                  'stop_loss': [],
-                  'target_price': [],
-                  'strike': [],
-                  'Position_type': [],
-                  'Trailing': []}
-
-    order_book = {'Timestamp': [],
-                  'Ticker': [],
-                  'Order_side': [],
-                  'Price': [],
-                  'Summary': []}
-
-    # Closed position dictionary
-    CLOSE_DICT = {'Timestamp': [],
-                  'TradingSymbol': [],
-                  'Instrument_type': [],
-                  "SD": [],
-                  'SellPrice': [],
-                  'LTP': [],
-                  'PnL': []}
-
-    entry_time = dt.strptime(f"{current_date_str}  {entry_para_dict['strategy_entry_time']}", "%Y-%m-%d %H:%M:%S")
-    exit_time = dt.strptime(f"{current_date_str}  {entry_para_dict['strategy_exit_time']}", "%Y-%m-%d %H:%M:%S")
-
-    # day_breaker flag
-    day_breaker = False
-    entry_spot = None
-    sd = None
 
     ####### Breaking Day if Holiday Occur #######
     if not holidays_df.filter(pl.col("DATE") == current_date).is_empty():
@@ -252,11 +209,12 @@ for current_date in trading_days:
     intraday_df_dict = {"Weekly": [], "Next_Weekly": [], "Monthly": []}
 
     ### Saving Directory Initializer ###
-    result_holder_con.strategy_save_path_initializer(result_save_dir, entry_para_dict['strategy_name'], total_orders, start_date, end_date, entry_time, exit_time)
+    result_holder_con.strategy_save_path_initializer(result_save_dir, entry_para_dict['strategy_name'], legs_handler_con.total_orders, start_date, end_date, entry_time, exit_time)
 
     ### SD Manager Initializer ###
     sd_full_file = SDManager()
 
-    #### Flags for the Engine #####
-    initial_entry = False
-    overall_tp_activated = False
+    day_processor_con = DayProcessor(current_date_str, entry_para_dict)
+
+
+

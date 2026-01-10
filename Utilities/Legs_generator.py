@@ -40,6 +40,9 @@ class LegsHandler:
         self._is_loaded: bool = False
         self._has_weekday_stoploss: bool = False  # Track if any leg has weekday-specific stoploss
         self._last_loaded_date: Optional[datetime] = None  # Track last date used for loading
+        self.total_multiple = None
+        self.total_orders = None
+
     
     def _check_weekday_stoploss_required(self) -> bool:
         """
@@ -124,6 +127,11 @@ class LegsHandler:
         self._has_weekday_stoploss = self._check_weekday_stoploss_required()
         self._last_loaded_date = current_date
         self._is_loaded = True
+
+        ##### Elements Generation for Margin Calculation #######
+        self.total_multiple = max(self.option_types.count("CE"), self.option_types.count("PE"))
+        self.total_orders = len(self.orders) 
+
         
         return self.orders, self.lazy_leg_dict, self.option_types, self.expiry_types, self.synthetic_checking
     
@@ -137,6 +145,8 @@ class LegsHandler:
         self._is_loaded = False
         self._has_weekday_stoploss = False
         self._last_loaded_date = None
+        self.total_multiple = None
+        self.total_orders = None
     
     def _parse_leg_file(self, leg_file_path: Path, leg_id: str, current_date: Optional[datetime] = None) -> Dict[str, Any]:
         """

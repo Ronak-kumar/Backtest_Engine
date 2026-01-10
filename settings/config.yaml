@@ -1,0 +1,65 @@
+symbol_name_mapping:
+  NIFTY FIN SERVICE: 'FINNIFTY'
+  NIFTY 50: 'NIFTY50'
+  Nifty50: 'NIFTY50'
+  INDIA VIX: 'VIX'
+  IndiaVix: 'VIX'
+  NIFTY BANK: 'BANKNIFTY'
+  BankNifty: 'BANKNIFTY'
+  Banknifty: 'BANKNIFTY'
+  BSE BANKEX: 'BANKEX'
+  BSEBANKEX: 'BANKEX'
+  BSE SENSEX: 'SENSEX'
+  BSESENSEX: 'SENSEX'
+
+symbol_spread_mapping:
+  nifty: 50
+  banknifty: 100
+  finnifty: 50
+  niftymdcap: 50
+  bankex: 100
+  sensex: 100
+
+symbol_lotsize_mapping:
+  nifty: 75
+  banknifty: 35
+  finnifty: 65
+  niftymdcap: 140
+  bankex: 30
+  sensex: 20
+
+clickhouse_database_params:
+  type: 'clickhouse'
+  host: 'localhost'
+  port: 8123
+  username: 'clickhouse'
+  password: 'clickhouse'
+  database_name: 'market_data'
+  option_table: 'options'
+  spot_table: 'spot'
+
+csv_files_configration:
+  holidays_csv_filename: 'Holidays inc Sat & Sunday.csv'
+  event_csv_filename: 'Events List.csv'
+  charges_csv_filename: 'Charges_Values.csv'
+
+charges_configration:
+  slippage_percentage: 0.1
+  brokrage: 7
+  exchange_tc: 0.00053
+  sebi_tc: 0.000002
+  stt: 0.000625
+  stamp_duty: 0.00003
+  gst_percentage: 18
+
+broker_freeze_qty:
+  nifty: 1800
+  banknifty: 900
+  finnifty: 1800
+  bankex: 900
+  sensex: 1000
+
+
+
+
+

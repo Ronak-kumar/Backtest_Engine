@@ -1,0 +1,338 @@
+-- ============================================================================
+-- OPTIONS QUERY TEMPLATE
+-- ============================================================================
+-- This file contains SQL query templates for querying options data from ClickHouse
+-- Replace {table_name} with actual table name (typically "options" from config)
+-- Replace {param_name} with actual parameter values when using parameterized queries
+-- ============================================================================
+
+-- ============================================================================
+-- 1. BASIC QUERY - Get all columns for a symbol within date range
+-- ============================================================================
+SELECT *
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND toDate(Timestamp) BETWEEN %(start_date)s AND %(end_date)s
+ORDER BY Timestamp
+
+-- Parameters:
+--   symbol: String (e.g., 'NIFTY', 'BANKNIFTY', 'SPY')
+--   start_date: Date (e.g., '2024-01-01')
+--   end_date: Date (e.g., '2024-12-31')
+
+
+-- ============================================================================
+-- 2. SELECT SPECIFIC COLUMNS - Get OHLC data for specific option
+-- ============================================================================
+SELECT
+    toUnixTimestamp(Timestamp) AS Timestamp,
+    round(Open, 2) AS Open,
+    round(High, 2) AS High,
+    round(Low, 2) AS Low,
+    round(Close, 2) AS Close,
+    Strike,
+    Expiry,
+    Instrument_type,
+    Symbol,
+    Volume,
+    Open_Interest
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND Timestamp BETWEEN %(start_timestamp)s AND %(end_timestamp)s
+  AND Strike = %(strike)s
+  AND Expiry = %(expiry)s
+  AND Instrument_type = %(instrument_type)s
+ORDER BY Timestamp
+
+-- Parameters:
+--   symbol: String
+--   start_timestamp: DateTime (e.g., '2024-01-01 09:00:00')
+--   end_timestamp: DateTime (e.g., '2024-01-01 15:30:00')
+--   strike: UInt32 (e.g., 20000)
+--   expiry: Date (e.g., '2024-01-25')
+--   instrument_type: Enum8 ('CE' or 'PE')
+
+
+-- ============================================================================
+-- 3. GET TRADING DAYS - Get distinct trading dates for a symbol
+-- ============================================================================
+SELECT DISTINCT toDate(Timestamp) AS trade_date
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND toDate(Timestamp) BETWEEN %(start_date)s AND %(end_date)s
+ORDER BY trade_date
+
+-- Parameters:
+--   symbol: String
+--   start_date: Date
+--   end_date: Date
+
+
+-- ============================================================================
+-- 4. GET EXPIRY DATES - Get distinct expiry dates for a symbol
+-- ============================================================================
+SELECT DISTINCT toDate(Expiry) AS expiry_dates
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND toDate(Timestamp) BETWEEN %(start_date)s AND %(end_date)s
+ORDER BY expiry_dates
+
+-- Parameters:
+--   symbol: String
+--   start_date: Date
+--   end_date: Date
+
+
+-- ============================================================================
+-- 5. GET AVAILABLE STRIKES - Get distinct strikes for a symbol and expiry
+-- ============================================================================
+SELECT DISTINCT Strike
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND toDate(Timestamp) BETWEEN %(start_date)s AND %(end_date)s
+  AND Expiry = %(expiry)s
+ORDER BY Strike
+
+-- Parameters:
+--   symbol: String
+--   start_date: Date
+--   end_date: Date
+--   expiry: Date
+
+
+-- ============================================================================
+-- 6. FILTER BY EXPIRY LIST - Get data for multiple expiries
+-- ============================================================================
+SELECT *
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND toDate(Timestamp) BETWEEN %(start_date)s AND %(end_date)s
+  AND Expiry IN %(expiry_list)s
+ORDER BY Timestamp, Strike, Expiry
+
+-- Parameters:
+--   symbol: String
+--   start_date: Date
+--   end_date: Date
+--   expiry_list: Array of Dates (e.g., ['2024-01-25', '2024-02-29'])
+
+
+-- ============================================================================
+-- 7. FILTER BY INSTRUMENT TYPE - Get only Calls or Puts
+-- ============================================================================
+SELECT *
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND toDate(Timestamp) BETWEEN %(start_date)s AND %(end_date)s
+  AND Instrument_type = %(instrument_type)s
+ORDER BY Timestamp, Strike, Expiry
+
+-- Parameters:
+--   symbol: String
+--   start_date: Date
+--   end_date: Date
+--   instrument_type: Enum8 ('CE' for calls, 'PE' for puts)
+
+
+-- ============================================================================
+-- 8. FILTER BY STRIKE RANGE - Get options within strike range
+-- ============================================================================
+SELECT *
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND toDate(Timestamp) BETWEEN %(start_date)s AND %(end_date)s
+  AND Strike >= %(min_strike)s
+  AND Strike <= %(max_strike)s
+ORDER BY Timestamp, Strike, Expiry
+
+-- Parameters:
+--   symbol: String
+--   start_date: Date
+--   end_date: Date
+--   min_strike: UInt32
+--   max_strike: UInt32
+
+
+-- ============================================================================
+-- 9. GET OPTIONS BY INDICE - Filter by underlying index
+-- ============================================================================
+SELECT *
+FROM {table_name}
+WHERE Indice = %(indice)s
+  AND toDate(Timestamp) BETWEEN %(start_date)s AND %(end_date)s
+ORDER BY Timestamp, Strike, Expiry
+
+-- Parameters:
+--   indice: String (e.g., 'NIFTY', 'BANKNIFTY')
+--   start_date: Date
+--   end_date: Date
+
+
+-- ============================================================================
+-- 10. GET OPTIONS BY EXCHANGE - Filter by exchange (NSE/BSE)
+-- ============================================================================
+SELECT *
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND Exchange = %(exchange)s
+  AND toDate(Timestamp) BETWEEN %(start_date)s AND %(end_date)s
+ORDER BY Timestamp, Strike, Expiry
+
+-- Parameters:
+--   symbol: String
+--   exchange: Enum8 ('NSE' or 'BSE')
+--   start_date: Date
+--   end_date: Date
+
+
+-- ============================================================================
+-- 11. AGGREGATE BY DATE - Get daily OHLC for an option
+-- ============================================================================
+SELECT
+    toDate(Timestamp) AS trade_date,
+    min(Open) AS day_open,
+    max(High) AS day_high,
+    min(Low) AS day_low,
+    argMax(Close, Timestamp) AS day_close,
+    sum(Volume) AS total_volume,
+    argMax(Open_Interest, Timestamp) AS day_oi
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND Strike = %(strike)s
+  AND Expiry = %(expiry)s
+  AND Instrument_type = %(instrument_type)s
+  AND toDate(Timestamp) BETWEEN %(start_date)s AND %(end_date)s
+GROUP BY trade_date
+ORDER BY trade_date
+
+-- Parameters:
+--   symbol: String
+--   strike: UInt32
+--   expiry: Date
+--   instrument_type: Enum8
+--   start_date: Date
+--   end_date: Date
+
+
+-- ============================================================================
+-- 12. GET ATM OPTIONS - Get at-the-money options (closest to spot price)
+-- ============================================================================
+-- Note: This requires joining with spot table or providing spot_price as parameter
+SELECT *
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND toDate(Timestamp) = %(trade_date)s
+  AND Expiry = %(expiry)s
+  AND abs(Strike - %(spot_price)s) = (
+    SELECT min(abs(Strike - %(spot_price)s))
+    FROM {table_name}
+    WHERE Symbol = %(symbol)s
+      AND toDate(Timestamp) = %(trade_date)s
+      AND Expiry = %(expiry)s
+  )
+ORDER BY Instrument_type, Strike
+
+-- Parameters:
+--   symbol: String
+--   trade_date: Date
+--   expiry: Date
+--   spot_price: Decimal (current spot price)
+
+
+-- ============================================================================
+-- 13. GET OPTIONS CHAIN - Get all strikes for a specific expiry on a date
+-- ============================================================================
+SELECT
+    Strike,
+    Instrument_type,
+    argMax(Close, Timestamp) AS last_price,
+    argMax(Volume, Timestamp) AS last_volume,
+    argMax(Open_Interest, Timestamp) AS last_oi
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND toDate(Timestamp) = %(trade_date)s
+  AND Expiry = %(expiry)s
+GROUP BY Strike, Instrument_type
+ORDER BY Strike, Instrument_type
+
+-- Parameters:
+--   symbol: String
+--   trade_date: Date
+--   expiry: Date
+
+
+-- ============================================================================
+-- 14. MONTHLY EXPORT QUERY - Export data for a specific month
+-- ============================================================================
+SELECT *
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND date >= %(start_date)s
+  AND date < %(end_date)s
+ORDER BY date, strike, expiration
+
+-- Parameters:
+--   symbol: String
+--   start_date: Date (first day of month, e.g., '2024-01-01')
+--   end_date: Date (first day of next month, e.g., '2024-02-01')
+
+-- ============================================================================
+-- 15. META DATA EXTRACTION - Meta data fetching 
+-- ============================================================================
+SELECT 
+    count(*) as row_count,
+    max(Timestamp) as last_update,
+    (SELECT count(*) FROM system.columns 
+        WHERE table = '{table_name}'
+        AND database = currentDatabase()) as column_count
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+    AND toDate(Timestamp) BETWEEN %(start_date)s AND %(end_date)s
+
+-- Parameters:
+--   symbol: String
+--   start_date: Date
+--   end_date: Date
+-- Note: Adjust column list as needed
+
+
+-- ============================================================================
+-- 16. CUSTOM COLUMN SELECTION - Select specific columns only
+-- ============================================================================
+SELECT 
+    Timestamp,
+    Symbol,
+    Strike,
+    Expiry,
+    Instrument_type,
+    Close,
+    Volume,
+    Open_Interest
+FROM {table_name}
+WHERE Symbol = %(symbol)s
+  AND toDate(Timestamp) BETWEEN %(start_date)s AND %(end_date)s
+ORDER BY Timestamp
+
+-- Parameters:
+--   symbol: String
+--   start_date: Date
+--   end_date: Date
+-- Note: Adjust column list as needed
+
+-- ============================================================================
+-- COMMON TABLE COLUMNS REFERENCE
+-- ============================================================================
+-- Timestamp        : DateTime('UTC') - Timestamp of the data point
+-- Symbol/Ticker    : String - Symbol name (e.g., 'NIFTY', 'SPY')
+-- Open             : Decimal(18, 2) - Opening price
+-- High             : Decimal(18, 2) - High price
+-- Low              : Decimal(18, 2) - Low price
+-- Close            : Decimal(18, 2) - Closing price
+-- Strike           : UInt32 - Strike price
+-- Expiry           : Date - Expiration date
+-- Instrument_type  : Enum8('CE' = 1, 'PE' = 2) - Call or Put
+-- Volume           : UInt32 - Trading volume
+-- Open_Interest    : UInt32 - Open interest
+-- Indice           : LowCardinality(String) - Underlying index
+-- Exchange         : Enum8('NSE' = 1, 'BSE' = 2) - Exchange name
+-- ============================================================================

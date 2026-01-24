@@ -302,6 +302,9 @@ class LegsHandler:
         leg_dict["leg_hopping_count_sl"] = get_value("leg_hopping_count_sl", default=0, converter=int)
         leg_dict["leg_hopping_count_tgt"] = get_value("leg_hopping_count_tgt", default=0, converter=int)
         leg_dict["leg_hopping_count_next_leg"] = get_value("leg_hopping_count_next_leg", default=0, converter=int)
+
+        # Unique leg identifier
+        leg_dict["unique_leg_id"] = leg_file_path.stem
         
         # Parse SM leg data (stored as string representation of list)
         sm_leg_data_str = get_value("sm_leg_data", default="[]")

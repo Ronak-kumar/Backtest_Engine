@@ -1,12 +1,14 @@
 from clickhouse_connect import get_client
 
 class ClickHouse:
-    def __init__(self, host = 'localhost', username = 'default', password = '' ,database_name = 'default', port = 8123):
+    def __init__(self, host = 'localhost', username = 'default', password = '' ,database_name = 'default', port = 8123, options_table = 'options', spot_table = 'indices') -> None:
         self.host = host
         self.username = username
         self.password = password
         self.database_name = database_name
         self.port = port
+        self.clickhouse_options_table_name = options_table
+        self.clickhouse_spot_table_name = spot_table
         self.database_name = database_name
         self.client = None
         # self.table_sql_mapping = {

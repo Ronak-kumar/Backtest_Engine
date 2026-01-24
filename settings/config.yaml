@@ -45,7 +45,7 @@ csv_files_configration:
 
 charges_configration:
   slippage_percentage: 0.1
-  brokrage: 7
+  brokerage: 7
   exchange_tc: 0.00053
   sebi_tc: 0.000002
   stt: 0.000625

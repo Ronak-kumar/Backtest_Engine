@@ -309,7 +309,6 @@ class MonthlyParquetBuilder:
             engine='pyarrow',
             compression=PARQUET_COMPRESSION,
             compression_level=PARQUET_COMPRESSION_LEVEL,
-            index=False,  # Index is stored separately
             row_group_size=PARQUET_ROW_GROUP_SIZE,
             use_dictionary=True,
             write_statistics=True
@@ -421,7 +420,7 @@ class MonthlyParquetBuilder:
 if __name__ == "__main__":
     # Load configuration
     settings_path = os.path.join(base_path, 'settings', 'config.yaml')
-    clickhouse_params = LoadYamlfile(file_path=settings_path).get('database')
+    clickhouse_params = LoadYamlfile(file_path=settings_path).get('clickhouse_database_params')
     
     # Initialize ClickHouse connection
     clickhouse_connector = ClickhouseConnector(clickhouse_params)
@@ -433,9 +432,5 @@ if __name__ == "__main__":
         clickhouse_object=clickhouse_connector
     )
     
-    # Example usage
-    builder.export_monthly(symbol="NIFTY", year=2024, month=4)
+    builder.export_monthly(symbol="NIFTY", year=2024, month=2)
     
-    # Uncomment to export full year or range:
-    # builder.export_year('NIFTY', 2024)
-    # builder.export_range('NIFTY', 2020, 2024)

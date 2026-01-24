@@ -18,16 +18,20 @@ from Utilities.Logger import Logger
 from Utilities.missing_date_handler import MissingDates
 from Utilities.clickhouse_connector import ClickHouse
 from Utilities.query_template_loader import QueryTemplateLoader
-from Utilities.Result_handler import ResultHolder
 from Utilities.Helper_functions import LotSize
-from Utilities.Helper_functions import OrderSequenceMapper
-from Utilities.SD_manager import SDManager
 from Utilities.Legs_generator import LegsHandler
+from Utilities.drawdown_calculation import drawdown_cal
+from Utilities.heat_map import heat_map
 from Utilities.Day_Processor import DayProcessor
+from Managers.options_data_manager import DayOptionFrame
+from Database_manager.data_extractor import MonthlyParquetBuilder
+from Managers.EOD_file_manager import EODFileManager
+import time
 
+start_time = time.time()
 ### Parameters Loading Section ###
 # param_csv_file = sys.argv[1]
-param_csv_file = 'D:/Development/Coding_Projects/market_project/old_backtest_engine/strategies/sm10_tgt_80_sl_10_inverse_leg5/entry_parameter_0121_1225_0916_1530_nifty.csv'
+param_csv_file = r"D:\Development\Coding_Projects\market_project\old_backtest_engine\strategies\strategy_creation_1_sm5\entry_parameter_0125_0126_0916_1528_nifty.csv".replace("\\", "/")
 param_csv_file_dir = ("/").join(param_csv_file.split("/")[:-1])
 entry_para_dict = _load_engine_main_entry_parameters(load_parameters_from_csv(param_csv_file))
 
@@ -46,7 +50,7 @@ entry_para_dict['base_symbol_spread'] = config.get('symbol_spread_mapping', entr
 entry_para_dict['symbol_lotsize'] = config.get('symbol_lotsize_mapping', entry_para_dict['indices'].lower())
 
 ### Setting Result Save Path ###
-result_save_dir = MAIN_DIR /  entry_para_dict['indices'].lower()
+result_save_dir = MAIN_DIR / "results" /  entry_para_dict['indices'].lower()
 result_save_dir.mkdir(parents=True, exist_ok=True)
 
 ####### Getting Holiday and Event files ######
@@ -74,7 +78,9 @@ clickhouse_obj = ClickHouse(host=clickhouse_details['host'],
                             username=clickhouse_details['username'],
                             password=clickhouse_details['password'],
                             database_name=clickhouse_details['database_name'],
-                            port=clickhouse_details['port'])
+                            port=clickhouse_details['port'],
+                            options_table=clickhouse_details['option_table'],
+                            spot_table=clickhouse_details['spot_table'])
 clickhouse_client = clickhouse_obj.get_client()
 
 
@@ -157,13 +163,25 @@ prev_spot_required_data = prev_spot_required_data[prev_spot_required_data['Times
 prev_day_close = prev_spot_required_data['Close'].iloc[-1]
 
 ## Class which handles generated results ###
-result_holder_con = ResultHolder()
 legs_handler_con = LegsHandler()
+
+### DuckDB initializations ###
+day_option_frame_con = DayOptionFrame()
+
 
 for current_date in trading_days:
     # storing date both in str and datetime fi
     current_date_str = dt.strftime(current_date, "%Y-%m-%d")
     print("Processing date: ", current_date_str)
+
+    # Create builder instance
+    builder = MonthlyParquetBuilder(
+        clickhouse_client=clickhouse_client,
+        clickhouse_object=clickhouse_obj
+    )
+    ### creating monthly parquet cached files ###
+    builder.export_monthly(symbol=entry_para_dict['indices'].upper(), year=current_date.year, month=current_date.month)
+
     spot_df = full_spot_df.filter(pl.col("Timestamp").dt.date() == current_date)
     spot_df = spot_df.filter((pl.col("Timestamp").dt.time() >= dt.strptime('09:15:00', "%H:%M:%S").time()) & (
                 pl.col("Timestamp").dt.time() <= dt.strptime('15:30:00', "%H:%M:%S").time()))
@@ -178,14 +196,29 @@ for current_date in trading_days:
         miss_con.missing_dict_update(current_date, f"Saturday/Sunday Occured")
         continue
 
+
+    ####### Breaking Day if Holiday Occur #######
+    if not holidays_df.filter(pl.col("DATE") == current_date).is_empty():
+        logger.info(f"{current_date} Holiday happened no trading day")
+        miss_con.missing_dict_update(current_date, "Holiday, no trading day")
+        day_breaker = True
+
+    ### Initilizing day processor for each day ###
+    day_processor_con = DayProcessor(current_date_str, entry_para_dict, day_option_frame_con)
+
     # Generate legs from CSV files using LegsHandler
     # Smart reload: Only reloads if weekday-specific stoploss is present, otherwise uses cached data
     orders, lazy_leg_dict, option_types, expiry_types, synthetic_checking = legs_handler_con.legs_generator(
         param_csv_file_dir, 
         current_date=current_date)
-
-    order_sequence_mapper_con = OrderSequenceMapper()
-    orders, lazy_leg_dict = order_sequence_mapper_con.legid_mapping(orders, lazy_leg_dict)
+    
+    ### Saving Directory Initializer ###
+    strategy_save_dir = result_save_dir / entry_para_dict['strategy_name'] / f"legs{legs_handler_con.total_orders}_{start_date.date().strftime('%m_%Y')}_{end_date.date().strftime('%m_%Y')}_{day_processor_con.entry_time.time().strftime('%H%M')}_{day_processor_con.exit_time.time().strftime('%H%M')}"
+    day_processor_con.strategy_save_dir = strategy_save_dir
+    day_processor_con.orders = orders
+    day_processor_con.lazy_leg_dict = lazy_leg_dict
+    day_processor_con.option_types = option_types
+    day_processor_con.expiry_types = expiry_types
 
     if synthetic_checking:
         logger.info(f"Rolling Straddle file not available for indice {entry_para_dict['indices']} on Timestamp {current_date}")
@@ -195,26 +228,24 @@ for current_date in trading_days:
     else:
         synthetic_df = pd.DataFrame()
 
-
-    ####### Breaking Day if Holiday Occur #######
-    if not holidays_df.filter(pl.col("DATE") == current_date).is_empty():
-        logger.info(f"{current_date} Holiday happened no trading day")
-        miss_con.missing_dict_update(current_date, "Holiday, no trading day")
-        day_breaker = True
-
     ####### Saving Occured Event ########
     event = "No Event"
 
-    ### Intraday Dataframe Dictionary Segregated by Expiry ###
-    intraday_df_dict = {"Weekly": [], "Next_Weekly": [], "Monthly": []}
+    day_processor_con.options_frame_initilizer()
 
-    ### Saving Directory Initializer ###
-    result_holder_con.strategy_save_path_initializer(result_save_dir, entry_para_dict['strategy_name'], legs_handler_con.total_orders, start_date, end_date, entry_time, exit_time)
+    day_processor_con.process_day(spot_df, vix_df, prev_day_close, charges_params_dict, logger, synthetic_df)
 
-    ### SD Manager Initializer ###
-    sd_full_file = SDManager()
 
-    day_processor_con = DayProcessor(current_date_str, entry_para_dict)
+    # Update prev_day_close for next iteration
+    # if not spot_df.is_empty():
+    #     prev_day_close = spot_df.sort("Timestamp", reverse=True)['Close'][0]
+
+# End of Backtest Engine Main File
+EODFileManager_con = EODFileManager(strategy_save_dir=strategy_save_dir)
+eod_file_path = EODFileManager_con.realized_file_creator(indices=entry_para_dict['indices'])
+drawdown_cal(path=eod_file_path)
+heat_map(filepath=eod_file_path, indices=entry_para_dict['indices'])
+print("Total Execution Time: %s seconds" % (time.time() - start_time))
 
 
 

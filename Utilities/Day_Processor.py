@@ -41,11 +41,12 @@ import polars as pl
 import pandas as pd
 
 # Import refactored entry manager for better scalability
-from Managers.entry_manager_refactored import UnifiedEntryManager
+# from Managers.entry_manager import UnifiedEntryManager
 from Managers.exit_manager import ExitManager
 from Managers.pnl_manager import PNLManager
 from Managers.reentry_manager import ReentryManager
 from Utilities.Order_Sequencer import OrderSequenceMapper
+from Managers.entry_manager.entry_manager import EntryManager
 
 
 class DayProcessor:
@@ -98,7 +99,7 @@ class DayProcessor:
         
         # Initialize managers
         # Note: entry_manager will be initialized in process_day() when intraday_df_dict is available
-        self.entry_manager: Optional[UnifiedEntryManager] = None
+        self.entry_manager = None
         self.exit_manager = ExitManager()
         self.pnl_manager = PNLManager()
         self.reentry_manager = ReentryManager()
@@ -206,20 +207,19 @@ class DayProcessor:
         StoplossCalMode = self.entry_para_dict.get('StoplossCalMode', 'Close')  # From parameter_parser
         indices = self.entry_para_dict.get('indices', 'NIFTY')
         
-        # Initialize unified entry manager
-        self.entry_manager = UnifiedEntryManager(
-            base=base,
-            options_extractor_con=options_extractor_con,
-            spot_df=spot_df.to_pandas() if isinstance(spot_df, pl.DataFrame) else spot_df,
-            EntryMode=EntryMode,
-            lot_qty=lot_qty,
-            lotsize=lotsize,
-            StoplossCalMode=StoplossCalMode,
-            logger=logger,
-            miss_con=miss_con,
-            straddle_filepath=straddle_filepath,
-            indices=indices,
-            rolling_straddle_slice_time=rolling_straddle_slice_time
+        # ADD: New entry manager initialization
+        self.entry_manager = EntryManager(
+            options_extractor=options_extractor_con,
+            spot_df=None,  # Will be set in process_day()
+            config={
+                'base': self.entry_para_dict['base_symbol_spread'],
+                'lotsize': self.entry_para_dict['symbol_lotsize'],
+                'lot_qty': self.entry_para_dict['lots'],
+                'EntryMode': self.entry_para_dict['EntryMode'],
+                'StoplossCalMode': self.entry_para_dict['StoplossCalMode'],
+                'indices': self.entry_para_dict['indices']
+            },
+            logger=None  # Pass logger if you have one
         )
     
     def process_day(
@@ -302,12 +302,18 @@ class DayProcessor:
                     debug = ""
 
 
+            # ============================================================
+            # UPDATE POSITIONS (if any exist)
+            # ============================================================
             if len(self.pnl_manager.active_positions) > 0 or len(self.pnl_manager.closed_positions) > 0:
                 # Update P&L for open positions
                 self.TRADE_DICT = self.pnl_manager.update_all_ltps(current_timestamp=timestamp,
                                                 TRADE_DICT=self.TRADE_DICT,
                                                 options_extractor_con=self.day_option_frame_con)
                 
+            # ============================================================
+            # CHECKING POSITIONS CLOSING
+            # ============================================================
             if len(self.pnl_manager.active_positions) > 0:
                 # Check stop loss for all active positions
                 standing_positions_list = list(self.pnl_manager.active_positions.values())
@@ -332,148 +338,205 @@ class DayProcessor:
                         
             
             # Re-entry logic for positions that were closed
-            # if len(self.pnl_manager.closed_positions) > 0:
-            #     closed_positions_list = list(self.pnl_manager.closed_positions)
-            #     for closed_position in closed_positions_list:
-            #         if closed_position.exit_timestamp != current_time:
-            #             continue  # Only check re-entry on the timestamp when position was closed
+            if len(self.pnl_manager.closed_positions) > 0:
+                closed_positions_list = list(self.pnl_manager.closed_positions)
+                for closed_position in closed_positions_list:
+                    if closed_position.exit_timestamp != current_time:
+                        continue  # Only check re-entry on the timestamp when position was closed
                     
-            #         current_order = self.order_sequence_mapper_con.get_order(closed_position.unique_leg_id)
-            #         reentry_triggered, summary = self.reentry_manager.check_reentry_conditions(
-            #             position=closed_position,
-            #             current_timestamp=current_time,
-            #             current_ltp=spot_price,
-            #             spot_df=spot_df,
-            #             entry_para_dict=self.entry_para_dict
-            #         )
-            #         if reentry_triggered:
-            #             logger.info(f"Re-entry triggered for position {closed_position.leg_id} at {current_time}")
-            #             # Create new order dict based on closed position details
-            #             new_order = closed_position.leg_dict.copy()
-            #             new_order['order_initialization_time'] = current_time
-                        
-            #             # Execute re-entry using entry manager
-            #             self.TRADE_DICT, self.order_book, self.orders, day_breaker = self.entry_manager.entry(
-            #                 index=current_time,
-            #                 order=new_order,
-            #                 spot=spot_price,
-            #                 leg_id=closed_position.leg_id,
-            #                 TRADE_DICT=self.TRADE_DICT,
-            #                 order_book=self.order_book,
-            #                 orders={closed_position.leg_id: new_order}
-            #             )
-                        
-            #             if day_breaker:
-            #                 self.day_breaker = True
-            #                 break
+                    record_entry = False
+                    leg_id = closed_position.leg_id
+                    order_to_execute = closed_position.leg_dict
 
-            #     # Check for exit conditions
-            #     # self.TRADE_DICT, self.CLOSE_DICT, self.day_breaker = self.exit_manager.check_exits(
-            #     #     current_time=current_time,
-            #     #     spot_price=spot_price,
-            #     #     vix_value=vix_value,
-            #     #     prev_day_close=prev_day_close,
-            #     #     TRADE_DICT=self.TRADE_DICT,
-            #     #     CLOSE_DICT=self.CLOSE_DICT,
-            #     #     entry_para_dict=self.entry_para_dict,
-            #     #     logger=logger
-            #     # )
-                
-            #     if self.day_breaker:
-            #         logger.info("Day breaker activated. Exiting day loop.")
-            #         break
+                    stoploss_based_closing = "SL" in closed_position.exit_reason
+                    target_based_closing = "Target" in closed_position.exit_reason
+
+                    # Rentry for sl based closed position
+                    if stoploss_based_closing and order_to_execute.get("rentry_sl_toggle", False):
+                        if order_to_execute.get("total_sl_rentry") > 0:
+                            self.order_sequence_mapper_con.hopping_count_manager(leg_id, "total_sl_rentry")
+                            order_to_execute['total_sl_rentry'] -= 1
+                            reentry_execution_type = "IMMEDIATE"
+                            record_entry = True
+
+                    # Rentry for target based closed position
+                    elif target_based_closing and order_to_execute.get("rentry_tgt_toggle", False):
+                        if order_to_execute.get("total_tgt_rentry") > 0:
+                            self.order_sequence_mapper_con.hopping_count_manager(leg_id, "total_tgt_rentry")
+                            order_to_execute['total_tgt_rentry'] -= 1
+                            reentry_execution_type = "IMMEDIATE"
+                            record_entry = True
 
 
-            if current_time.time() >= self.entry_time.time() and not self.initial_entry:
-                # Handle initial entry logic using unified entry manager
-                if self.entry_manager is None:
-                    logger.error("Entry manager not initialized. Please provide intraday_df_dict and miss_con in process_day()")
-                    break
-                
-                # Execute entry for all legs
-                for leg_id, order in self.orders.items():
-                    try:
-                        order["order_initialization_time"] = current_time
-                        self.TRADE_DICT, self.order_book, self.orders, day_breaker = self.entry_manager.entry(
-                            index=current_time,
-                            order=order,
-                            spot=spot_price,
-                            leg_id=leg_id,
-                            TRADE_DICT=self.TRADE_DICT,
-                            order_book=self.order_book,
-                            orders=self.orders,
-                        )
-                        if day_breaker:
-                            self.day_breaker = True
-                            break
-                    except Exception as e:
-                        logger.error(f"Entry execution failed for leg {leg_id} at {current_time}: {e}")
-                        self.day_breaker = True
-                        break
+                    # lazy legs execution 
+                    if not record_entry:
+                        if stop_loss_triggers and order_to_execute.get("leg_hopping_count_sl", 0) > 0 and order_to_execute.get("leg_tobe_executed_on_sl", False):
+                            order_to_execute, leg_id =  self.order_sequence_mapper_con.get_next_order(order_to_execute, leg_id, hopping_type="leg_hopping_count_sl", leg_to_fetch="leg_tobe_executed_on_sl")
+                            record_entry = True
+                            reentry_execution_type = "IMMEDIATE"
 
-                self.initial_entry = True
-                            
-            # Execute pending entries for conditional strategies (momentum, range breakout, rolling straddle)
-            # These strategies check conditions on every timestamp
-            if self.entry_manager is not None and self.initial_entry:
-                # Re-check all pending entries (momentum, range breakout, rolling straddle)
-                # The unified manager handles this internally - strategies check conditions each call
-                for leg_id, order in self.orders.items():
-                    # Skip already executed legs
-                    if leg_id in self.TRADE_DICT.get("leg_id", []):
-                        continue
-                    
-                    # Only re-check if it's a conditional entry type
-                    if (order.get("sm_toggle") or 
-                        order.get("range_breakout_toggle") or 
-                        order.get("rolling_straddle_toggle") or 
-                        order.get("rolling_straddle_vwap_toggle")):
+
+                        elif target_based_closing and order_to_execute.get("leg_hopping_count_tgt", 0) > 0 and not order_to_execute.get("leg_tobe_executed_on_target", False):
+                            order_to_execute, leg_id =  self.order_sequence_mapper_con.get_next_order(order_to_execute, leg_id, hopping_type="leg_hopping_count_tgt", leg_to_fetch="leg_tobe_executed_on_target")
+                            record_entry = True
+                            reentry_execution_type = "IMMEDIATE"
+
+                            # order_to_execute["leg_hopping_count_tgt"] -= 1
+                            # leg_id = order_to_execute.get("leg_tobe_executed_on_target", "").replace(".", "_")
+                            # order_to_execute = self.order_sequence_mapper_con.get_order(leg_id)
+
+                        elif (stoploss_based_closing or target_based_closing) and order_to_execute.get("leg_hopping_count_next_leg", 0) > 0 and not order_to_execute.get("next_lazy_leg_to_be_executed", False):
+                            order_to_execute, leg_id =  self.order_sequence_mapper_con.get_next_order(order_to_execute, leg_id, hopping_type="leg_hopping_count_next_leg", leg_to_fetch="next_lazy_leg_to_be_executed")
+                            record_entry = True
+                            reentry_execution_type = "IMMEDIATE"
+
+                            # order_to_execute["leg_hopping_count_next_leg"] -= 1
+                            # leg_id = order_to_execute.get("next_lazy_leg_to_be_executed", "").replace(".", "_")
+                            # order_to_execute = self.order_sequence_mapper_con.get_order(leg_id)
+
+
+
+
+                    if record_entry:
+                        # registring oredrs in entry manager
                         try:
-                            self.TRADE_DICT, self.order_book, self.orders, day_breaker = self.entry_manager.entry(
-                                index=current_time,
-                                order=order,
-                                spot=spot_price,
+                            order_id = self.entry_manager.submit_order(
                                 leg_id=leg_id,
-                                TRADE_DICT=self.TRADE_DICT,
-                                order_book=self.order_book,
-                                orders=self.orders
+                                leg_config=order_to_execute,
+                                timestamp=current_time,
+                                spot_price=spot_price,
+                                execution_type=reentry_execution_type
                             )
                             
-                            if day_breaker:
-                                self.day_breaker = True
-                                break
+                            if order_id:
+                                logger.info(f"Submitted order: {order_id} for {leg_id}")
+                            else:
+                                logger.warning(f"Failed to submit order for {leg_id}")
+                                
                         except Exception as e:
-                            logger.warning(f"Conditional entry check failed for leg {leg_id} at {current_time}: {e}")
-                            # Don't break on conditional entry failures - these are expected until condition is met
+                            logger.error(f"Error submitting order for {leg_id}: {e}")
+                            self.day_breaker = True
+                            break
+
+                # Check for exit conditions
+                # self.TRADE_DICT, self.CLOSE_DICT, self.day_breaker = self.exit_manager.check_exits(
+                #     current_time=current_time,
+                #     spot_price=spot_price,
+                #     vix_value=vix_value,
+                #     prev_day_close=prev_day_close,
+                #     TRADE_DICT=self.TRADE_DICT,
+                #     CLOSE_DICT=self.CLOSE_DICT,
+                #     entry_para_dict=self.entry_para_dict,
+                #     logger=logger
+                # )
+                
+                if self.day_breaker:
+                    logger.info("Day breaker activated. Exiting day loop.")
+                    break
+
+
+            # ============================================================
+            # PHASE 1: ORDER SUBMISSION (at entry time)
+            # ============================================================
+            if current_time.time() >= self.entry_time.time() and not self.initial_entry:
+                logger.info(f"Submitting orders at {current_time.time()}")
+                
+                # Submit all main leg orders
+                for leg_id, order in self.order_sequence_mapper_con.main_orders.items():
+                    try:
+                        order_id = self.entry_manager.submit_order(
+                            leg_id=leg_id,
+                            leg_config=order,
+                            timestamp=current_time,
+                            spot_price=spot_price
+                        )
                         
-                        if len(self.TRADE_DICT["Leg_id"] + self.CLOSE_DICT["Entry_price"]) > self.pnl_manager._position_counter:
-                            self.pnl_manager.create_position(leg_id=leg_id,
-                                                            unique_leg_id=order['unique_leg_id'],
-                                                            trading_symbol=self.TRADE_DICT['TradingSymbol'][-1],
-                                                            instrument_type=self.TRADE_DICT['Instrument_type'][-1],
-                                                            strike=self.TRADE_DICT['Strike'][-1],
-                                                            expiry=self.TRADE_DICT['Expiry_type'][-1],
-                                                            entry_timestamp=self.TRADE_DICT['Entry_timestamp'][-1],
-                                                            entry_price=self.TRADE_DICT['Entry_price'][-1],
-                                                            quantity=self.TRADE_DICT['Lot_size'][-1]* self.entry_manager.lotsize,
-                                                            position_type=self.TRADE_DICT['Position_type'][-1],
-                                                            leg_dict=order,
-                                                            sl_value=self.TRADE_DICT['Stop_loss'][-1],
-                                                            target_price=self.TRADE_DICT['Target_price'][-1],
-                                                            )
-                            self.TRADE_DICT = self.pnl_manager.update_all_ltps(current_timestamp=timestamp,
-                                                            TRADE_DICT=self.TRADE_DICT,
-                                                            options_extractor_con=self.day_option_frame_con)
-
-            # if (len(self.pnl_manager.active_positions) + len(self.pnl_manager.closed_positions)) > 0:
-            #     print(self.pnl_manager.pnl_history[-1])
-
-            # Record snapshot
+                        if order_id:
+                            logger.info(f"Submitted order: {order_id} for {leg_id}")
+                        else:
+                            logger.warning(f"Failed to submit order for {leg_id}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error submitting order for {leg_id}: {e}")
+                        self.day_breaker = True
+                        break
+                
+                self.initial_entry = True
+                
+                # Log statistics
+                stats = self.entry_manager.get_statistics()
+                logger.info(f"Pending orders: {stats['pending_count']}")
+                logger.info(f"By strategy: {stats['pending_by_strategy']}")
+            
+            # ============================================================
+            # PHASE 2: EXECUTE PENDING ORDERS (every minute)
+            # ============================================================
+            if self.initial_entry and len(self.entry_manager.pending_orders) != 0:
+                try:
+                    TRADE_DICT, order_book, executed_ids = self.entry_manager.execute_pending_entries(
+                        timestamp=current_time,
+                        spot_price=spot_price,
+                        TRADE_DICT=self.TRADE_DICT,
+                        order_book=self.order_book
+                    )
+                    
+                    # Update instance variables
+                    self.TRADE_DICT = TRADE_DICT
+                    self.order_book = order_book
+                    
+                    # If orders were executed, create positions
+                    if executed_ids:
+                        logger.info(f"Executed {len(executed_ids)} orders at {current_time.time()}")
+                        
+                        for order_id in executed_ids:
+                            # Find the index of this execution in TRADE_DICT
+                            # (newly executed orders are at the end)
+                            position_idx = len(self.TRADE_DICT['Leg_id']) - len(executed_ids) + executed_ids.index(order_id)
+                            
+                            # Get leg_id and order
+                            executed_leg_id = self.TRADE_DICT['Leg_id'][position_idx]
+                            leg_order = self.order_sequence_mapper_con._get_order(executed_leg_id)
+                            # leg_order = self.orders[executed_leg_id]
+                            
+                            # Create position in PNL Manager
+                            self.pnl_manager.create_position(
+                                leg_id=executed_leg_id,
+                                unique_leg_id=leg_order['unique_leg_id'],
+                                trading_symbol=self.TRADE_DICT['TradingSymbol'][position_idx],
+                                instrument_type=self.TRADE_DICT['Instrument_type'][position_idx],
+                                strike=self.TRADE_DICT['Strike'][position_idx],
+                                expiry=self.TRADE_DICT['Expiry_type'][position_idx],
+                                entry_timestamp=self.TRADE_DICT['Entry_timestamp'][position_idx],
+                                entry_price=self.TRADE_DICT['Entry_price'][position_idx],
+                                quantity=self.TRADE_DICT['Lot_size'][position_idx] * self.entry_manager.config['lotsize'],
+                                position_type=self.TRADE_DICT['Position_type'][position_idx],
+                                leg_dict=leg_order,
+                                sl_value=self.TRADE_DICT['Stop_loss'][position_idx],
+                                target_price=self.TRADE_DICT['Target_price'][position_idx]
+                            )
+                            
+                            logger.info(f"Created position for {executed_leg_id}")
+                            
+                except Exception as e:
+                    logger.error(f"Error executing pending entries: {e}")
+                    self.day_breaker = True
+                    break
+            
+            # ============================================================
+            # RECORD SNAPSHOT
+            # ============================================================
             if len(self.pnl_manager.active_positions) > 0 or len(self.pnl_manager.closed_positions) > 0:
                 self.pnl_manager._record_pnl_snapshot(timestamp=timestamp, spot_price=spot_price)
-                
-
-            if current_time.time() >= self.exit_time.time(): #or len(self.pnl_manager.active_positions) == 0 or self.day_breaker:
+            
+            # ============================================================
+            # EXIT TIME CHECK
+            # ============================================================
+            if current_time.time() >= self.exit_time.time():
                 logger.info("Strategy exit time reached. Exiting day loop.")
-                self.pnl_manager.day_file_creator(date_str=self.entry_time.strftime("%Y-%m-%d"), strategy_save_dir=self.strategy_save_dir)
+                
+                # Save day file
+                self.pnl_manager.day_file_creator(
+                    date_str=self.entry_time.strftime("%Y-%m-%d"),
+                    strategy_save_dir=self.strategy_save_dir
+                )
                 break

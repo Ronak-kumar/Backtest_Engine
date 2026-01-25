@@ -31,7 +31,7 @@ import time
 start_time = time.time()
 ### Parameters Loading Section ###
 # param_csv_file = sys.argv[1]
-param_csv_file = r"D:\Development\Coding_Projects\market_project\old_backtest_engine\strategies\strategy_creation_1_sm5\entry_parameter_0125_0126_0916_1528_nifty.csv".replace("\\", "/")
+param_csv_file = r"D:\Development\Coding_Projects\market_project\old_backtest_engine\strategies\algo_backtest_re1_full1_without_hedge2_2025\entry_parameter_0125_0126_0916_1530_nifty.csv".replace("\\", "/")
 param_csv_file_dir = ("/").join(param_csv_file.split("/")[:-1])
 entry_para_dict = _load_engine_main_entry_parameters(load_parameters_from_csv(param_csv_file))
 

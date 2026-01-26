@@ -1,29 +1,7 @@
-# from datetime import datetime as dt
-# from pathlib import Path
-# import sys
-
-# MAIN_DIR = Path(__file__).resolve().parent.parent
-# sys.path.append(str(MAIN_DIR))
-
-# from Core import EngineCoreVariables
-# from Utilities.Helper_functions import OrderSequenceMapper
-
-
-# class DayProcessor(EngineCoreVariables):
-#     def __init__(self, current_date_str: str, entry_para_dict: dict, orders: dict, lazy_leg_dict: dict):
-
-#         super.__init__()
-
-#         # Day start time & end time
-#         self.entry_time = dt.strptime(f"{current_date_str}  {entry_para_dict['strategy_entry_time']}", "%Y-%m-%d %H:%M:%S")
-#         self.exit_time = dt.strptime(f"{current_date_str}  {entry_para_dict['strategy_exit_time']}", "%Y-%m-%d %H:%M:%S")
-
-#     def day_initilization(self):
-#         order_sequence_mapper_con = OrderSequenceMapper()
-#         self.orders, self.lazy_leg_dict = order_sequence_mapper_con.legid_mapping(orders, lazy_leg_dict)
-
-
-
+from pathlib import Path
+import sys
+MAIN_DIR = Path(__file__).resolve().parent.parent
+sys.path.append(str(MAIN_DIR))
 
 """
 Day Processor Module (Updated with Manager Composition)

@@ -33,6 +33,8 @@ local_data/
 .vscode/
 .results/
 results/
+strategies/
+.strategies/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

@@ -30,8 +30,8 @@ import time
 
 start_time = time.time()
 ### Parameters Loading Section ###
-# param_csv_file = sys.argv[1]
-param_csv_file = r"D:\Development\Coding_Projects\market_project\old_backtest_engine\strategies\algo_backtest_re1_full1_without_hedge2_2025\entry_parameter_0125_0126_0916_1530_nifty.csv".replace("\\", "/")
+param_csv_file = sys.argv[1].replace("\\", "/")
+# param_csv_file = r"D:\Development\Coding_Projects\market_project\Backtest_Engine\strategies\new_engine_test\entry_parameter_1225_0126_0916_1510_nifty.csv".replace("\\", "/")
 param_csv_file_dir = ("/").join(param_csv_file.split("/")[:-1])
 entry_para_dict = _load_engine_main_entry_parameters(load_parameters_from_csv(param_csv_file))
 
@@ -246,6 +246,6 @@ eod_file_path = EODFileManager_con.realized_file_creator(indices=entry_para_dict
 drawdown_cal(path=eod_file_path)
 heat_map(filepath=eod_file_path, indices=entry_para_dict['indices'])
 print("Total Execution Time: %s seconds" % (time.time() - start_time))
-
+time.sleep(5)
 
 

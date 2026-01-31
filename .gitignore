@@ -35,6 +35,11 @@ local_data/
 results/
 strategies/
 .strategies/
+.LLM_optimization/
+LLM_optimization
+bin/
+Managers/llm_chain_optimizer.py
+Managers/llm_optimizer.py
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

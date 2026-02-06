@@ -91,6 +91,7 @@ class ProfessionalTradeAnalystPlotter:
             leg_id = match.group(1) if match else None
 
             next_exits = exits[
+                                    (exits["Timestamp"] > entry["Timestamp"]) &
                                     (exits["Ticker"] == entry["Ticker"]) &
                                     (exits["Summary"].str.contains(leg_id, regex=False))
                                 ]

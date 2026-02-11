@@ -151,6 +151,9 @@ class PNLManager:
         self.total_unrealized_pnl: float = 0.0
         self._position_counter: int = 0
         self.charges_params: Dict[str, float] = {}
+        # Order book to track executed orders (entries/exits)
+        # Each entry: {"Timestamp","Ticker","Order_side","Price","Summary"}
+        self.order_book: List[Dict[str, Any]] = []
     
     def create_position(
         self,
@@ -228,6 +231,19 @@ class PNLManager:
         )
         
         self.active_positions[position_id] = position
+
+        # Record execution in order book
+        try:
+            self.record_order(
+                timestamp=entry_timestamp,
+                ticker=trading_symbol,
+                order_side=position_type,
+                price=entry_price,
+                summary=f"Executed entry of leg {leg_id}, of strike {strike} with sl {stop_loss}, target {target_price}"
+            )
+        except Exception:
+            # Non-fatal: ensure position still created even if order book fails
+            pass
         return position
     
     def _calculate_stop_loss(
@@ -400,6 +416,18 @@ class PNLManager:
         # Update total unrealized P&L (since one position is removed)
         self._update_total_unrealized_pnl()
         
+        # Record exit in order book
+        try:
+            self.record_order(
+                timestamp=exit_timestamp,
+                ticker=position.trading_symbol,
+                order_side=("Buy" if position.position_type == "Sell" else "Sell"),
+                price=exit_price,
+                summary=position.exit_reason
+            )
+        except Exception:
+            pass
+        
         return position
     
     def get_position(self, position_id: str) -> Optional[Position]:
@@ -560,6 +588,7 @@ class PNLManager:
     
     def day_file_creator(self, date_str: str, strategy_save_dir) -> None:
         """Create day file for PNL history."""
+
         day_df, charges_df = self.tradelog_dataframe()
         filesave_dir = strategy_save_dir / date_str[:4] / date_str[5:-3]
         filesave_dir.mkdir(parents=True, exist_ok=True)
@@ -573,6 +602,8 @@ class PNLManager:
         
         day_file_path = filesave_dir / f"{date_str}_tradelog.parquet"
         final_df.write_parquet(day_file_path)
+
+        self.write_orderbook_frame(strategy_save_dir)
 
     def tradelog_dataframe(self) -> pl.DataFrame:
         df = pl.DataFrame(self.pnl_history)
@@ -725,3 +756,52 @@ class PNLManager:
         self.total_realized_pnl = 0.0
         self.total_unrealized_pnl = 0.0
         self._position_counter = 0
+        self.order_book.clear()
+
+    def record_order(self, timestamp: datetime, ticker: str, order_side: str, price: float, summary: str) -> None:
+        """
+        Record an executed order into the order book.
+
+        Args:
+            timestamp: Execution timestamp
+            ticker: Trading symbol
+            order_side: 'BUY', 'SELL' or descriptive side
+            price: Executed price
+            summary: Short summary string
+        """
+        self.order_book.append({
+            "Timestamp": timestamp,
+            "Ticker": ticker,
+            "Order_side": order_side,
+            "Price": round(float(price), 2) if price is not None else None,
+            "Summary": summary,
+        })
+
+    def get_order_book_frame(self):
+        if not self.order_book:
+            return pl.DataFrame()
+        return pl.DataFrame(self.order_book)
+
+
+    def write_orderbook_frame(self, strategy_save_dir) -> None:
+        """
+        Write the order book frame.
+        """
+        order_book_df = self.get_order_book_frame()
+
+        file_path = strategy_save_dir / 'order_book.csv'
+
+        # 1️⃣ Ensure directory exists
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 2️⃣ Check if file exists
+        file_exists = file_path.exists()
+
+        # 3️⃣ Write
+        if not file_exists:
+            # First write → include header
+            order_book_df.write_csv(file_path)
+        else:
+            # Append → no header
+            with open(file_path, "ab") as f:
+                order_book_df.write_csv(f, include_header=False)

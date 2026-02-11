@@ -100,10 +100,10 @@ class StopLossExit(ExitStrategy):
 
         if position_type.upper() == "BUY":
             if sl_comparing_value <= position.stop_loss:
-                return True, f"SL Triggered for leg {leg_dict.get('unique_leg_id', '')} at {position.stop_loss} with a comapraring value of {sl_comparing_value}"
+                return True, f"SL Triggered Exit for leg {leg_dict.get('unique_leg_id', '')} at {position.stop_loss} with a comapraring value of {sl_comparing_value}"
         else:  # SELL
             if sl_comparing_value >= position.stop_loss:
-                return True, f"SL Triggered for leg {leg_dict.get('unique_leg_id', '')} at {position.stop_loss} with a comapraring value of {sl_comparing_value}"
+                return True, f"SL Triggered Exit for leg {leg_dict.get('unique_leg_id', '')} at {position.stop_loss} with a comapraring value of {sl_comparing_value}"
         
         
         # # Calculate P&L
@@ -182,11 +182,11 @@ class TargetProfitExit(ExitStrategy):
         if position_type.upper() == "BUY":
             # Check if target is hit
             if target_comparing_value >= position.target_price:
-                return True, f"Target Triggered for leg {leg_dict.get('unique_leg_id', '')} at {position.target_price} with a comapraring value of {target_comparing_value}"
+                return True, f"Target Triggered Exit for leg {leg_dict.get('unique_leg_id', '')} at {position.target_price} with a comapraring value of {target_comparing_value}"
         
         else:  # SELL
             if target_comparing_value <= position.target_price:
-                return True, f"Target Triggered for leg {leg_dict.get('unique_leg_id', '')} at {position.target_price} with a comapraring value of {target_comparing_value}"
+                return True, f"Target Triggered Exit for leg {leg_dict.get('unique_leg_id', '')} at {position.target_price} with a comapraring value of {target_comparing_value}"
                 
 
         return False, ""

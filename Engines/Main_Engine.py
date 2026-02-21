@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 import sys
 from dateutil.relativedelta import relativedelta
@@ -9,6 +10,7 @@ import pandas as pd
 MAIN_DIR = Path(__file__).resolve().parent.parent
 TRADING_DAYS_QUERY_NUM = 3
 FULL_DATA_QUERY_NUM = 1
+EXPIRY_DATE_NUM = 4
 sys.path.append(str(MAIN_DIR))
 
 from Utilities.parameter_parser import _load_engine_main_entry_parameters
@@ -19,6 +21,7 @@ from Utilities.missing_date_handler import MissingDates
 from Utilities.clickhouse_connector import ClickHouse
 from Utilities.query_template_loader import QueryTemplateLoader
 from Utilities.Helper_functions import LotSize
+from Utilities.Helper_functions import get_expiry_days_offset
 from Utilities.Legs_generator import LegsHandler
 from Utilities.drawdown_calculation import drawdown_cal
 from Utilities.heat_map import heat_map
@@ -31,7 +34,7 @@ import time
 start_time = time.time()
 ### Parameters Loading Section ###
 param_csv_file = sys.argv[1].replace("\\", "/")
-# param_csv_file = r"D:\Development\Coding_Projects\market_project\Backtest_Engine\strategies\best_sm_strategy_rerun_sl50_tgt_80_mtm_8k_hour_barrier_final6\entry_parameter_0120_0126_0916_1528_nifty.csv".replace("\\", "/")
+# param_csv_file = r"D:\Development\Coding_Projects\market_project\Backtest_Engine\strategies\sm_main_strat\entry_parameter_0120_0226_0916_1528_nifty.csv".replace("\\", "/")
 param_csv_file_dir = ("/").join(param_csv_file.split("/")[:-1])
 entry_para_dict = _load_engine_main_entry_parameters(load_parameters_from_csv(param_csv_file))
 
@@ -161,6 +164,17 @@ parameters = {
 prev_spot_required_data = clickhouse_client.query_df(query, parameters=parameters)
 prev_spot_required_data = prev_spot_required_data[prev_spot_required_data['Timestamp'].dt.date != dt.strptime(db_initial_extraction_date, "%Y-%m-%d").date()] = prev_spot_required_data[prev_spot_required_data['Timestamp'].dt.date != dt.strptime(db_initial_extraction_date, "%Y-%m-%d").date()]
 prev_day_close = prev_spot_required_data['Close'].iloc[-1]
+prev_spot_required_data = pl.from_pandas(prev_spot_required_data)
+
+query = query_loader.get_template(EXPIRY_DATE_NUM, table_name=clickhouse_details['option_table'])
+parameters = {
+            "symbol": entry_para_dict['indices'].upper(),
+            "start_date": db_initial_extraction_date,
+            "end_date": db_end_extraction_date
+        }
+expiry_dates_list = clickhouse_client.query(query, parameters=parameters).result_rows
+
+expiry_offset_map = get_expiry_days_offset(trading_days, expiry_dates_list)
 
 ## Class which handles generated results ###
 legs_handler_con = LegsHandler()
@@ -203,6 +217,12 @@ for current_date in trading_days:
         miss_con.missing_dict_update(current_date, "Holiday, no trading day")
         day_breaker = True
 
+    ### Expiry days trading days selection ###
+    if entry_para_dict['select_Day']:
+        date_offset = expiry_offset_map[current_date]
+        if date_offset not in entry_para_dict["expiry_taketrade_list"]:
+            continue
+
     ### Initilizing day processor for each day ###
     day_processor_con = DayProcessor(current_date_str, entry_para_dict, day_option_frame_con)
 
@@ -235,7 +255,7 @@ for current_date in trading_days:
 
     try:
 
-        day_processor_con.process_day(spot_df, vix_df, prev_day_close, charges_params_dict, logger, synthetic_df)
+        day_processor_con.process_day(spot_df, vix_df, prev_spot_required_data, charges_params_dict, logger, synthetic_df)
 
     except Exception as e:
         logger.info(f"Unable to generate date {current_date} for reason {e}")
@@ -244,11 +264,15 @@ for current_date in trading_days:
     # Update prev_day_close for next iteration
     # if not spot_df.is_empty():
     #     prev_day_close = spot_df.sort("Timestamp", reverse=True)['Close'][0]
+    prev_spot_required_data = copy.deepcopy(spot_df)
 
 # End of Backtest Engine Main File
 EODFileManager_con = EODFileManager(strategy_save_dir=strategy_save_dir)
 eod_file_path = EODFileManager_con.realized_file_creator(indices=entry_para_dict['indices'])
 drawdown_cal(path=eod_file_path)
+day_ohlc_spot = full_spot_df.to_pandas().set_index('Timestamp').resample("D").agg({"Open": 'first', "High": "max", "Low": "min", "Close":'last'}).dropna()
+
+day_ohlc_spot.to_csv(f"{strategy_save_dir}/Spot_Day_OHLC.csv")
 heat_map(filepath=eod_file_path, indices=entry_para_dict['indices'])
 print("Total Execution Time: %s seconds" % (time.time() - start_time))
 time.sleep(5)

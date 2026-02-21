@@ -254,6 +254,14 @@ def _load_engine_main_entry_parameters(entry_para_dict):
     result['breakout_minutes'] = int(entry_para_dict.get("breakout_minutes", 0))
     result['breakout_minutes_type'] = entry_para_dict.get("breakout_minutes_type")
 
+    # ============ Additional Features ================
+    result['orders_re_execution_on_flat'] = str(entry_para_dict.get("orders_re_execution_on_flat", "")).upper() == "TRUE"
+    result['re_execution_times'] = float(entry_para_dict.get("re_execution_times", 0.0) or 0.0)
+    result['re_execute_sl'] = float(entry_para_dict.get("re_execute_sl", 0.0) or 0.0)
+    result['re_execute_target'] = float(entry_para_dict.get("re_execute_target", 0.0) or 0.0)
+    result['directional_execution'] = str(entry_para_dict.get("directional_execution", "")).upper() == "TRUE"
+    result['trade_plotting'] = str(entry_para_dict.get("trade_plotting", "")).upper() == "TRUE"
+
     # ========== Rolling Straddle Slice Time ==========
     try:
         time_val = entry_para_dict.get("rolling_straddle_slice_time")

@@ -19,6 +19,14 @@ import numpy as np
 from datetime import datetime
 import re
 
+# Try importing pandas_ta, fallback to manual calculation if not available
+try:
+    import pandas_ta_classic as ta
+    PANDAS_TA_AVAILABLE = True
+except ImportError:
+    PANDAS_TA_AVAILABLE = False
+    print("Warning: pandas_ta not available. Using manual indicator calculations.")
+
 class ProfessionalTradeAnalystPlotter:
     """
     Institutional-grade trade execution plotter with multi-layer insights.
@@ -32,7 +40,7 @@ class ProfessionalTradeAnalystPlotter:
     6. Performance metrics panel
     """
     
-    def __init__(self, orders_df, spot_df, strategy_name="Strategy"):
+    def __init__(self, orders_df, spot_df, prev_day_df, strategy_name="Strategy"):
         """
         Args:
             orders_df: Order book DataFrame with columns: Timestamp, Order_side, Ticker, Price, Summary
@@ -41,8 +49,18 @@ class ProfessionalTradeAnalystPlotter:
         """
         self.orders_df = orders_df.copy()
         self.spot_df = spot_df.copy()
+        self.current_date = self.spot_df["Timestamp"].iloc[-1].date()
+        # self.spot_df = pd.concat([prev_day_df, self.spot_df])
         self.strategy_name = strategy_name
+        # Indicator visibility states (default: all visible)
+        self.indicator_visibility = {
+            'supertrend': False,
+            'pivot_points': False,
+            'rsi': True,
+            'adx': True
+        }
         self._prepare_data()
+        self._calculate_indicators()
         
     def _prepare_data(self):
         """Prepare and clean data."""
@@ -127,26 +145,217 @@ class ProfessionalTradeAnalystPlotter:
         else:  # SELL
             return (entry_price - exit_price)
     
+    def _calculate_indicators(self):
+        """Calculate technical indicators: Supertrend, Pivot Points, RSI, ADX."""
+        # Set index for pandas_ta if needed
+        df = self.spot_df.copy()
+        df.set_index("Timestamp", inplace=True)
+        
+        # Ensure we have required columns
+        if not all(col in df.columns for col in ['Open', 'High', 'Low', 'Close']):
+            raise ValueError("Missing required OHLC columns")
+        
+        # Calculate RSI (14 period - TradingView default)
+        if PANDAS_TA_AVAILABLE:
+            df.ta.rsi(length=14, append=True)
+            self.spot_df['RSI'] = df['RSI_14'].values
+        else:
+            self.spot_df['RSI'] = self._calculate_rsi(df['Close'], period=14)
+        
+        # Calculate ADX (14 period - TradingView default)
+        if PANDAS_TA_AVAILABLE:
+            df.ta.adx(length=14, append=True)
+            self.spot_df['ADX'] = df['ADX_14'].values
+            self.spot_df['DI+'] = df['DMP_14'].values
+            self.spot_df['DI-'] = df['DMN_14'].values
+        else:
+            adx_data = self._calculate_adx(df, period=14)
+            self.spot_df['ADX'] = adx_data['ADX'].values
+            self.spot_df['DI+'] = adx_data['DI+'].values
+            self.spot_df['DI-'] = adx_data['DI-'].values
+        
+        # Calculate Supertrend (10 period, 3.0 multiplier - TradingView default)
+        if PANDAS_TA_AVAILABLE:
+            df.ta.supertrend(length=10, multiplier=3.0, append=True)
+            self.spot_df['Supertrend'] = df['SUPERT_10_3.0'].values
+            self.spot_df['Supertrend_Direction'] = df['SUPERTd_10_3.0'].values
+        else:
+            st_data = self._calculate_supertrend(df, period=10, multiplier=3.0)
+            self.spot_df['Supertrend'] = st_data['Supertrend'].values
+            self.spot_df['Supertrend_Direction'] = st_data['Direction'].values
+        
+        # Calculate Pivot Points (daily pivots)
+        pivot_data = self._calculate_pivot_points(df)
+        self.spot_df['PP'] = pivot_data['PP'].values
+        self.spot_df['R1'] = pivot_data['R1'].values
+        self.spot_df['R2'] = pivot_data['R2'].values
+        self.spot_df['S1'] = pivot_data['S1'].values
+        self.spot_df['S2'] = pivot_data['S2'].values
+        
+        # Reset index if needed
+        if df.index.name == "Timestamp":
+            df.reset_index(inplace=True)
+    
+    def _calculate_rsi(self, close, period=14):
+        """Calculate RSI manually."""
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
+    
+    def _calculate_adx(self, df, period=14):
+        """Calculate ADX, DI+, DI- manually."""
+        high = df['High']
+        low = df['Low']
+        close = df['Close']
+        
+        # Calculate True Range
+        tr1 = high - low
+        tr2 = abs(high - close.shift())
+        tr3 = abs(low - close.shift())
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        
+        # Calculate Directional Movement
+        dm_plus = high - high.shift()
+        dm_minus = low.shift() - low
+        dm_plus = dm_plus.where((dm_plus > dm_minus) & (dm_plus > 0), 0)
+        dm_minus = dm_minus.where((dm_minus > dm_plus) & (dm_minus > 0), 0)
+        
+        # Smooth TR and DM
+        atr = tr.rolling(window=period).mean()
+        di_plus = 100 * (dm_plus.rolling(window=period).mean() / atr)
+        di_minus = 100 * (dm_minus.rolling(window=period).mean() / atr)
+        
+        # Calculate ADX
+        dx = 100 * abs(di_plus - di_minus) / (di_plus + di_minus)
+        adx = dx.rolling(window=period).mean()
+        
+        return pd.DataFrame({
+            'ADX': adx,
+            'DI+': di_plus,
+            'DI-': di_minus
+        })
+    
+    def _calculate_supertrend(self, df, period=10, multiplier=3.0):
+        """Calculate Supertrend manually (TradingView method)."""
+        high = df['High']
+        low = df['Low']
+        close = df['Close']
+        
+        # Calculate ATR
+        tr1 = high - low
+        tr2 = abs(high - close.shift())
+        tr3 = abs(low - close.shift())
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(window=period).mean()
+        
+        # Calculate basic bands
+        hl_avg = (high + low) / 2
+        upper_band = hl_avg + (multiplier * atr)
+        lower_band = hl_avg - (multiplier * atr)
+        
+        # Initialize arrays
+        supertrend = pd.Series(index=df.index, dtype=float)
+        direction = pd.Series(index=df.index, dtype=float)
+        
+        for i in range(len(df)):
+            if i == 0:
+                supertrend.iloc[i] = upper_band.iloc[i]
+                direction.iloc[i] = -1
+            else:
+                # Update upper and lower bands
+                if close.iloc[i] <= supertrend.iloc[i-1]:
+                    supertrend.iloc[i] = upper_band.iloc[i]
+                else:
+                    supertrend.iloc[i] = lower_band.iloc[i]
+                
+                # Determine direction
+                if close.iloc[i] > supertrend.iloc[i]:
+                    direction.iloc[i] = 1
+                elif close.iloc[i] < supertrend.iloc[i]:
+                    direction.iloc[i] = -1
+                else:
+                    direction.iloc[i] = direction.iloc[i-1]
+        
+        return pd.DataFrame({
+            'Supertrend': supertrend,
+            'Direction': direction
+        })
+    
+    def _calculate_pivot_points(self, df):
+        """Calculate daily pivot points (PP, R1, R2, S1, S2)."""
+        # Work with a copy to avoid modifying original
+        df_work = df.copy()
+        
+        # If Timestamp is in columns, use it; otherwise use index
+        if 'Timestamp' in df_work.columns:
+            df_work['Date'] = pd.to_datetime(df_work['Timestamp']).dt.date
+        elif isinstance(df_work.index, pd.DatetimeIndex):
+            df_work['Date'] = df_work.index.date
+        else:
+            # Try to convert index to datetime
+            try:
+                df_work['Date'] = pd.to_datetime(df_work.index).date
+            except:
+                # Last resort: create date column from index position
+                df_work['Date'] = df_work.index
+        
+        # Group by date to get daily High, Low, Close
+        daily_data = df_work.groupby('Date').agg({
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last'
+        })
+        
+        # Calculate pivots (Standard Pivot Point formula)
+        daily_data['PP'] = (daily_data['High'] + daily_data['Low'] + daily_data['Close']) / 3
+        daily_data['R1'] = 2 * daily_data['PP'] - daily_data['Low']
+        daily_data['R2'] = daily_data['PP'] + (daily_data['High'] - daily_data['Low'])
+        daily_data['S1'] = 2 * daily_data['PP'] - daily_data['High']
+        daily_data['S2'] = daily_data['PP'] - (daily_data['High'] - daily_data['Low'])
+        
+        # Map back to original dataframe by merging on Date
+        result = df_work.merge(daily_data[['PP', 'R1', 'R2', 'S1', 'S2']], 
+                        left_on='Date', right_index=True, how='left')
+        
+        # Fill NaN values with forward fill (same pivot for the day)
+        for col in ['PP', 'R1', 'R2', 'S1', 'S2']:
+            result[col] = result[col].ffill().bfill()
+        
+        return pd.DataFrame({
+            'PP': result['PP'].values,
+            'R1': result['R1'].values,
+            'R2': result['R2'].values,
+            'S1': result['S1'].values,
+            'S2': result['S2'].values
+        })
+    
     def plot_professional_analysis(self, save_path=None, show=True):
         """
-        Create professional multi-layer visualization.
+        Create professional multi-layer visualization with technical indicators.
         
         Returns:
             plotly Figure object
         """
-        # Create subplots: Main chart + Volume + Performance metrics
+        # Create subplots: Main chart + RSI + ADX + Performance metrics
         fig = make_subplots(
-            rows=3, cols=1,
+            rows=5, cols=1,
             shared_xaxes=True,
-            vertical_spacing=0.12,
-            row_heights=[0.55, 0, 0.30],
+            vertical_spacing=0.08,
+            row_heights=[0.40, 0.15, 0.15, 0, 0.30],
             subplot_titles=(
                 "<b>Price Action & Order Execution</b>", 
-                "", 
+                "<b>RSI (14)</b>",
+                "<b>ADX (14)</b>",
+                "",
                 "<b>Trade Performance (Cumulative P&L)</b>"
             ),
             specs=[
                 [{"secondary_y": True}],
+                [{"secondary_y": False}],
+                [{"secondary_y": False}],
                 [{"secondary_y": False}],
                 [{"secondary_y": False}]
             ]
@@ -172,6 +381,127 @@ class ProfessionalTradeAnalystPlotter:
             ),
             row=1, col=1
         )
+        
+        # ============================================================
+        # TECHNICAL INDICATORS ON MAIN CHART
+        # ============================================================
+        
+        # Supertrend (TradingView style: green when bullish, red when bearish)
+        if self.indicator_visibility['supertrend'] and 'Supertrend' in self.spot_df.columns:
+            st_up = self.spot_df[self.spot_df['Supertrend_Direction'] == 1]
+            st_down = self.spot_df[self.spot_df['Supertrend_Direction'] == -1]
+            
+            if len(st_up) > 0:
+                fig.add_trace(
+                    go.Scatter(
+                        x=st_up["Timestamp"],
+                        y=st_up["Supertrend"],
+                        mode="lines",
+                        name="Supertrend (Bullish)",
+                        line=dict(color="#00D4AA", width=2),
+                        hovertemplate="<b>Supertrend</b><br>Time: %{x}<br>Price: %{y:.2f}<extra></extra>",
+                        showlegend=True,
+                        legendgroup="supertrend"
+                    ),
+                    row=1, col=1
+                )
+            
+            if len(st_down) > 0:
+                fig.add_trace(
+                    go.Scatter(
+                        x=st_down["Timestamp"],
+                        y=st_down["Supertrend"],
+                        mode="lines",
+                        name="Supertrend (Bearish)",
+                        line=dict(color="#F23645", width=2),
+                        hovertemplate="<b>Supertrend</b><br>Time: %{x}<br>Price: %{y:.2f}<extra></extra>",
+                        showlegend=True,
+                        legendgroup="supertrend"
+                    ),
+                    row=1, col=1
+                )
+        
+        # Pivot Points (TradingView style: PP in white, R1/R2 in red, S1/S2 in green)
+        if self.indicator_visibility['pivot_points']:
+            if 'PP' in self.spot_df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=self.spot_df["Timestamp"],
+                        y=self.spot_df["PP"],
+                        mode="lines",
+                        name="Pivot Point (PP)",
+                        line=dict(color="#FFFFFF", width=1.5, dash="dash"),
+                        hovertemplate="<b>PP</b><br>Time: %{x}<br>Price: %{y:.2f}<extra></extra>",
+                        showlegend=True,
+                        legendgroup="pivots",
+                        visible=True if self.indicator_visibility['pivot_points'] else 'legendonly'
+                    ),
+                    row=1, col=1
+                )
+            
+            if 'R1' in self.spot_df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=self.spot_df["Timestamp"],
+                        y=self.spot_df["R1"],
+                        mode="lines",
+                        name="Resistance 1 (R1)",
+                        line=dict(color="#FF6B6B", width=1, dash="dot"),
+                        hovertemplate="<b>R1</b><br>Time: %{x}<br>Price: %{y:.2f}<extra></extra>",
+                        showlegend=True,
+                        legendgroup="pivots",
+                        visible=True if self.indicator_visibility['pivot_points'] else 'legendonly'
+                    ),
+                    row=1, col=1
+                )
+            
+            if 'R2' in self.spot_df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=self.spot_df["Timestamp"],
+                        y=self.spot_df["R2"],
+                        mode="lines",
+                        name="Resistance 2 (R2)",
+                        line=dict(color="#FF5252", width=1, dash="dot"),
+                        hovertemplate="<b>R2</b><br>Time: %{x}<br>Price: %{y:.2f}<extra></extra>",
+                        showlegend=True,
+                        legendgroup="pivots",
+                        visible=True if self.indicator_visibility['pivot_points'] else 'legendonly'
+                    ),
+                    row=1, col=1
+                )
+            
+            if 'S1' in self.spot_df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=self.spot_df["Timestamp"],
+                        y=self.spot_df["S1"],
+                        mode="lines",
+                        name="Support 1 (S1)",
+                        line=dict(color="#4CAF50", width=1, dash="dot"),
+                        hovertemplate="<b>S1</b><br>Time: %{x}<br>Price: %{y:.2f}<extra></extra>",
+                        showlegend=True,
+                        legendgroup="pivots",
+                        visible=True if self.indicator_visibility['pivot_points'] else 'legendonly'
+                    ),
+                    row=1, col=1
+                )
+            
+            if 'S2' in self.spot_df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=self.spot_df["Timestamp"],
+                        y=self.spot_df["S2"],
+                        mode="lines",
+                        name="Support 2 (S2)",
+                        line=dict(color="#66BB6A", width=1, dash="dot"),
+                        hovertemplate="<b>S2</b><br>Time: %{x}<br>Price: %{y:.2f}<extra></extra>",
+                        showlegend=True,
+                        legendgroup="pivots",
+                        visible=True if self.indicator_visibility['pivot_points'] else 'legendonly'
+                    ),
+                    row=1, col=1
+                )
         
         # ============================================================
         # LAYER 2: WIN/LOSS BACKGROUND ZONES
@@ -359,7 +689,96 @@ class ProfessionalTradeAnalystPlotter:
         # )
         
         # ============================================================
-        # LAYER 6: PERFORMANCE METRICS (Cumulative P&L)
+        # LAYER 7: RSI INDICATOR (TradingView style)
+        # ============================================================
+        if 'RSI' in self.spot_df.columns:
+            rsi_visible = True if self.indicator_visibility['rsi'] else 'legendonly'
+            fig.add_trace(
+                go.Scatter(
+                    x=self.spot_df["Timestamp"],
+                    y=self.spot_df["RSI"],
+                    mode="lines",
+                    name="RSI (14)",
+                    line=dict(color="#FFA726", width=2),
+                    hovertemplate="<b>RSI</b><br>Time: %{x}<br>RSI: %{y:.2f}<extra></extra>",
+                    showlegend=True,
+                    visible=rsi_visible
+                ),
+                row=2, col=1
+            )
+            
+            # Add RSI levels (30, 50, 70) - TradingView style
+            fig.add_hline(y=70, line_dash="dash", line_color="#FF5252", line_width=1, 
+                         annotation_text="Overbought (70)", row=2, col=1)
+            fig.add_hline(y=50, line_dash="dot", line_color="#9E9E9E", line_width=0.5, row=2, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="#4CAF50", line_width=1,
+                         annotation_text="Oversold (30)", row=2, col=1)
+            
+            # Fill overbought/oversold zones
+            fig.add_hrect(y0=70, y1=100, fillcolor="rgba(255, 82, 82, 0.1)", 
+                         layer="below", line_width=0, row=2, col=1)
+            fig.add_hrect(y0=0, y1=30, fillcolor="rgba(76, 175, 80, 0.1)", 
+                         layer="below", line_width=0, row=2, col=1)
+        
+        # ============================================================
+        # LAYER 8: ADX INDICATOR (TradingView style)
+        # ============================================================
+        if 'ADX' in self.spot_df.columns:
+            adx_visible = True if self.indicator_visibility['adx'] else 'legendonly'
+            
+            # ADX line
+            fig.add_trace(
+                go.Scatter(
+                    x=self.spot_df["Timestamp"],
+                    y=self.spot_df["ADX"],
+                    mode="lines",
+                    name="ADX (14)",
+                    line=dict(color="#9C27B0", width=2),
+                    hovertemplate="<b>ADX</b><br>Time: %{x}<br>ADX: %{y:.2f}<extra></extra>",
+                    showlegend=True,
+                    visible=adx_visible
+                ),
+                row=3, col=1
+            )
+            
+            # DI+ line
+            if 'DI+' in self.spot_df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=self.spot_df["Timestamp"],
+                        y=self.spot_df["DI+"],
+                        mode="lines",
+                        name="DI+",
+                        line=dict(color="#4CAF50", width=1.5),
+                        hovertemplate="<b>DI+</b><br>Time: %{x}<br>DI+: %{y:.2f}<extra></extra>",
+                        showlegend=True,
+                        visible=adx_visible
+                    ),
+                    row=3, col=1
+                )
+            
+            # DI- line
+            if 'DI-' in self.spot_df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=self.spot_df["Timestamp"],
+                        y=self.spot_df["DI-"],
+                        mode="lines",
+                        name="DI-",
+                        line=dict(color="#F44336", width=1.5),
+                        hovertemplate="<b>DI-</b><br>Time: %{x}<br>DI-: %{y:.2f}<extra></extra>",
+                        showlegend=True,
+                        visible=adx_visible
+                    ),
+                    row=3, col=1
+                )
+            
+            # Add ADX level (25) - TradingView style
+            fig.add_hline(y=25, line_dash="dash", line_color="#FFA726", line_width=1,
+                         annotation_text="Strong Trend (25)", row=3, col=1)
+        
+        # ============================================================
+        # LAYER 9: PERFORMANCE METRICS (Cumulative P&L)
         # ============================================================
         if len(self.trades) > 0:
             # Calculate cumulative P&L
@@ -378,7 +797,7 @@ class ProfessionalTradeAnalystPlotter:
                     hovertemplate="Exit Time: %{x}<br>Cumulative P&L: %{y:.2f}<extra></extra>",
                     showlegend=True
                 ),
-                row=3, col=1
+                row=5, col=1
             )
             
             # Add zero line
@@ -386,7 +805,7 @@ class ProfessionalTradeAnalystPlotter:
                 y=0,
                 line_dash="dash",
                 line_color="gray",
-                row=3, col=1
+                row=5, col=1
             )
         
         # ============================================================
@@ -404,6 +823,88 @@ class ProfessionalTradeAnalystPlotter:
             f"<sup>Trades: {len(self.trades)} | Win Rate: {win_rate:.1f}% ({win_count}W/{loss_count}L) | "
             f"Total P&L: {total_pnl:+.2f}</sup>"
         )
+        
+        # Build updatemenus for indicator toggles
+        # Track which traces belong to which indicators
+        all_visible = [True] * len(fig.data)
+        supertrend_indices = []
+        pivot_indices = []
+        rsi_indices = []
+        adx_indices = []
+        
+        for i, trace in enumerate(fig.data):
+            name = trace.name if hasattr(trace, 'name') else ""
+            if "Supertrend" in name:
+                supertrend_indices.append(i)
+            elif any(x in name for x in ["PP", "R1", "R2", "S1", "S2", "Pivot", "Resistance", "Support"]):
+                pivot_indices.append(i)
+            elif "RSI" in name:
+                rsi_indices.append(i)
+            elif any(x in name for x in ["ADX", "DI+", "DI-"]):
+                adx_indices.append(i)
+        
+        # Create toggle buttons - TradingView style
+        # Simple approach: buttons to show/hide indicator groups
+        buttons = [
+            dict(
+                label="All Indicators",
+                method="update",
+                args=[{"visible": all_visible}]
+            )
+        ]
+        
+        # Helper to create visibility with specific indices hidden
+        def hide_indices(indices):
+            vis = [True] * len(fig.data)
+            for idx in indices:
+                if idx < len(vis):
+                    vis[idx] = False
+            return vis
+        
+        if supertrend_indices:
+            buttons.append(dict(
+                label="Toggle Supertrend",
+                method="update",
+                args=[{"visible": hide_indices(supertrend_indices)}]
+            ))
+        
+        if pivot_indices:
+            buttons.append(dict(
+                label="Toggle Pivots",
+                method="update",
+                args=[{"visible": hide_indices(pivot_indices)}]
+            ))
+        
+        if rsi_indices:
+            buttons.append(dict(
+                label="Toggle RSI",
+                method="update",
+                args=[{"visible": hide_indices(rsi_indices)}]
+            ))
+        
+        if adx_indices:
+            buttons.append(dict(
+                label="Toggle ADX",
+                method="update",
+                args=[{"visible": hide_indices(adx_indices)}]
+            ))
+        
+        updatemenus = [
+            dict(
+                type="buttons",
+                direction="right",
+                active=0,
+                x=0.01,
+                xanchor="left",
+                y=1.02,
+                yanchor="top",
+                buttons=buttons,
+                bgcolor="rgba(0,0,0,0.8)",
+                bordercolor="rgba(255,255,255,0.3)",
+                borderwidth=1,
+                font=dict(size=11, color="white")
+            ),
+        ]
         
         fig.update_layout(
             title=dict(
@@ -431,7 +932,8 @@ class ProfessionalTradeAnalystPlotter:
             plot_bgcolor="rgba(20,20,20,1)",
             paper_bgcolor="rgba(10,10,10,1)",
             margin=dict(l=80, r=250, t=120, b=80),
-            title_font_size=20
+            title_font_size=20,
+            updatemenus=updatemenus
         )
         
         # Update x-axes
@@ -450,17 +952,25 @@ class ProfessionalTradeAnalystPlotter:
             tickfont=dict(size=11),
             row=1, col=1
         )
-        # fig.update_yaxes(
-        #     title_text="<b>Volume</b>",
-        #     title_font=dict(size=13, color="white"),
-        #     tickfont=dict(size=11),
-        #     row=2, col=1
-        # )
+        fig.update_yaxes(
+            title_text="<b>RSI</b>",
+            title_font=dict(size=13, color="white"),
+            tickfont=dict(size=11),
+            range=[0, 100],
+            row=2, col=1
+        )
+        fig.update_yaxes(
+            title_text="<b>ADX</b>",
+            title_font=dict(size=13, color="white"),
+            tickfont=dict(size=11),
+            range=[0, 100],
+            row=3, col=1
+        )
         fig.update_yaxes(
             title_text="<b>Cumulative P&L</b>",
             title_font=dict(size=13, color="white"),
             tickfont=dict(size=11),
-            row=3, col=1
+            row=5, col=1
         )
         
         if save_path:

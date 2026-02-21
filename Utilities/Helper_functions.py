@@ -1,3 +1,4 @@
+import pandas as pd
 import yaml
 from datetime import datetime, date
 from functools import lru_cache
@@ -75,3 +76,28 @@ class LotSize:
         raise ValueError(
             f"No lot size defined for {index} on {trade_date}"
         )
+
+
+def get_expiry_days_offset(trading_days, expiry_dates_list):
+    trading_day_index = {d: i for i, d in enumerate(trading_days)}
+    expiry_dates = sorted(
+        row[0]
+        for row in expiry_dates_list
+    )
+    expiry_offset_map = {}
+    trading_days_df = pd.DataFrame(trading_days, columns=["date"])
+    expiry_dates = pd.DataFrame(expiry_dates, columns=["date"])
+    for index, expiry in expiry_dates.iterrows():
+        if index != 0:
+            trading_days_before_expiry = trading_days_df[(trading_days_df["date"] <= expiry["date"]) & (trading_days_df["date"] > expiry_dates.loc[index-1].date)]
+            trading_days_before_expiry.sort_values('date', ascending=False, inplace=True)
+        else:
+            trading_days_before_expiry = trading_days_df[(trading_days_df["date"] <= expiry["date"])]
+            trading_days_before_expiry.sort_values('date', ascending=False, inplace=True)
+
+        initial_offset = 0
+        for date in trading_days_before_expiry["date"].tolist():
+            expiry_offset_map[date] = initial_offset
+            initial_offset -= 1
+    return expiry_offset_map
+

@@ -208,7 +208,7 @@ class DayProcessor:
         self,
         spot_df: pl.DataFrame,
         vix_df: pl.DataFrame,
-        prev_day_close: float,
+        prev_day_df: pl.DataFrame,
         charges_params_dict: Dict[str, Any],
         logger: Any,
         synthetic_df: pd.DataFrame,
@@ -227,7 +227,7 @@ class DayProcessor:
         Args:
             spot_df: Spot price dataframe (polars DataFrame)
             vix_df: VIX dataframe (polars DataFrame)
-            prev_day_close: Previous day closing price
+            prev_day_df: Previous day full df
             charges_params_dict: Charges configuration dictionary
             logger: Logger instance
             synthetic_df: Synthetic dataframe
@@ -257,7 +257,8 @@ class DayProcessor:
             self.orders, self.lazy_leg_dict = self.order_sequence_mapper_con.legid_mapping(self.orders, self.lazy_leg_dict)
             self.pnl_manager.charges_params = charges_params_dict
 
-        once_execution = False
+        once_execution = self.entry_para_dict["re_execution_times"]
+        directional_processing = self.entry_para_dict["directional_execution"]
         print("Processing Day...")
         # Iterate through each timestamp in the spot dataframe
         for timestamp in spot_df['Timestamp']:
@@ -306,6 +307,13 @@ class DayProcessor:
                         logger.info(f"Stop loss triggered exit for position {standing_position.leg_id} at {current_time}")
                         self.pnl_manager.close_position(position_id=standing_position.position_id, exit_timestamp=current_time,
                                                         exit_price=exit_price, exit_reason=summary)
+                        
+                        # ============================================================
+                        # PHASE Additional: f sl hit in the first hour exit day (Single time per day)
+                        # ============================================================
+                        # first_execution_timestamp = dt.strptime('09:15:00', "%H:%M:%S")
+                        # if current_time.time() <= (first_execution_timestamp + relativedelta(minutes=60)).time():
+                        #     self.day_breaker = True
                 
                 standing_positions_list = list(self.pnl_manager.active_positions.values())
                 for standing_position in standing_positions_list:
@@ -316,6 +324,33 @@ class DayProcessor:
                         logger.info(f"Target triggered exit for position {standing_position.leg_id} at {current_time}")
                         self.pnl_manager.close_position(position_id=standing_position.position_id, exit_timestamp=current_time,
                                                         exit_price=exit_price, exit_reason=summary)
+
+            # ============================================================
+            # PHASE Additional: f sl hit in the first hour exit day (Single time per day)
+            # ============================================================
+            # ### If sl hit in the first hour exit day ###
+            # if len(self.order_book['Timestamp']) != 0:
+            #     first_execution_timestamp = self.order_book['Timestamp'][0]
+            #     if first_execution_timestamp + relativedelta(minutes=60) == current_time:
+            #         closed_positions_list = list(self.pnl_manager.closed_positions)
+            #         for closed_position in closed_positions_list:
+            #             stoploss_based_closing = "SL" in closed_position.exit_reason
+
+            #             if stoploss_based_closing:
+            #                 self.day_breaker = True
+
+            #                 if len(self.pnl_manager.active_positions) > 0:
+            #                     # Check stop loss for all active positions
+            #                     standing_positions_list = list(self.pnl_manager.active_positions.values())
+            #                     for standing_position in standing_positions_list:
+            #                         summary = f"First hour Stoploss Exit triggered for leg {standing_position.unique_leg_id} closing position at ltp of {standing_position.current_ltp}"
+            #                         exit_price = standing_position.current_ltp
+            #                         logger.info(
+            #                             f"First hour Stoploss Exit for position {standing_position.leg_id} at {current_time}")
+            #                         self.pnl_manager.close_position(position_id=standing_position.position_id,
+            #                                                         exit_timestamp=current_time,
+            #                                                         exit_price=exit_price, exit_reason=summary)
+                        
             
             # Re-entry logic for positions that were closed
             if len(self.pnl_manager.closed_positions) > 0 and not self.day_breaker:
@@ -405,14 +440,19 @@ class DayProcessor:
             # ============================================================
             # PHASE Additional: When all orders ends and no standing positions reexecute positions once again (Single time per day)
             # ============================================================
-            if len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(self.entry_manager.pending_orders) == 0 and not once_execution:
+            if (len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(self.entry_manager.pending_orders) == 0 and once_execution > 0):
                 self.entry_time = current_time
                 self.initial_entry = False
-                once_execution = True
+                once_execution -= 1
 
                 for leg_id, order in self.order_sequence_mapper_con.main_orders.items():
-                    self.order_sequence_mapper_con.main_orders[leg_id]["stoploss_value"] = 0.5
-                    self.order_sequence_mapper_con.main_orders[leg_id]["target_value"] = 0.8
+                    self.order_sequence_mapper_con.main_orders[leg_id]["stoploss_value"] = self.entry_para_dict["re_execute_sl"]/100
+                    self.order_sequence_mapper_con.main_orders[leg_id]["target_value"] = self.entry_para_dict["re_execute_target"]/100
+
+            if directional_processing:
+                if (len(self.pnl_manager.active_positions) == 1 and self.initial_entry and len(self.entry_manager.pending_orders) == 1):
+                    self.entry_manager.pending_orders = {}
+
 
 
             # ============================================================
@@ -420,6 +460,7 @@ class DayProcessor:
             # ============================================================
             if current_time.time() >= self.entry_time.time() and not self.initial_entry:
                 logger.info(f"Submitting orders at {current_time.time()}")
+                # spot_price = ((prev_day_df["Low"].min() + prev_day_df["High"].max())/2)
                 
                 # Submit all main leg orders
                 for leg_id, order in self.order_sequence_mapper_con.main_orders.items():
@@ -533,9 +574,9 @@ class DayProcessor:
                                                         exit_price=exit_price, exit_reason=summary)
 
                 ## Creatng per day plotting ###
-                if False:
+                if self.entry_para_dict["trade_plotting"]:
                     order_book_df = self.pnl_manager.get_order_book_frame()
-                    plotter = ProfessionalTradeAnalystPlotter(order_book_df.to_pandas(), spot_df.to_pandas(), self.entry_para_dict['strategy_name'])
+                    plotter = ProfessionalTradeAnalystPlotter(order_book_df.to_pandas(), spot_df.to_pandas(), prev_day_df.to_pandas(), self.entry_para_dict['strategy_name'])
                     plotter_save_path = self.strategy_save_dir / "Spot_Plot" / f'{(self.entry_para_dict["indices"]+"_"+current_time.strftime("%Y_%m_%d"))}.html'
                     plotter.plot_professional_analysis(plotter_save_path)
 
@@ -564,9 +605,9 @@ class DayProcessor:
                                                         exit_price=exit_price, exit_reason=summary)
 
                 ### Creatng per day plotting ###
-                if False:
+                if self.entry_para_dict["trade_plotting"]:
                     order_book_df = self.pnl_manager.get_order_book_frame()
-                    plotter = ProfessionalTradeAnalystPlotter(order_book_df.to_pandas(), spot_df.to_pandas(), self.entry_para_dict['strategy_name'])
+                    plotter = ProfessionalTradeAnalystPlotter(order_book_df.to_pandas(), spot_df.to_pandas(), prev_day_df.to_pandas(), self.entry_para_dict['strategy_name'])
                     plotter_save_path = self.strategy_save_dir / "Spot_Plot" / f'{(self.entry_para_dict["indices"]+"_"+current_time.strftime("%Y_%m_%d"))}.html'
                     plotter.plot_professional_analysis(plotter_save_path)
 

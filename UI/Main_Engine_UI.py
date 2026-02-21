@@ -295,6 +295,13 @@ def save_data_to_dict(entry_time, exit_time, indice, filename):
     data['combined_sl_percentage'] = combined_sl_percentage
     data['pair_dict'] = pair_dict
 
+    data['orders_re_execution_on_flat'] = orders_re_execution_on_flat
+    data['re_execution_times'] = re_execution_times
+    data['re_execute_sl'] = re_execute_sl
+    data['re_execute_target'] = re_execute_target
+    data['directional_execution'] = directional_execution
+    data['trade_plotting'] = trade_plotting
+
 
 
     with open(filename, 'w', newline='') as csvfile:
@@ -1804,7 +1811,7 @@ with st.container():
             # Delete button for each lazy leg
             st.button("🗑️ Remove Lazy Leg", key=f"delete_lazy_button_{row}",
                       on_click=remove_lazy_row, args=[row])
-    stoplosscol, temp = st.columns(2)
+    stoplosscol, additional_feature_col = st.columns(2)
 
 
 
@@ -1851,6 +1858,28 @@ with st.container():
 
         if selected_days_toggle:
             selected_days = st.multiselect("Select Days:", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], key="selected_days")
+
+
+    with additional_feature_col:
+        additional_feature_col.subheader("Additional Features")
+
+        re_execution_times = 0
+        re_execute_sl = 0
+        re_execute_target = 0
+
+
+        orders_re_execution_on_flat = st.toggle(label="Order Reexecute when position and orders are flat", key="orders_re_execution_on_flat")
+        if orders_re_execution_on_flat:
+            re_execution_times_col, re_execute_target_col, re_execute_sl_col = st.columns([1, 1, 1])
+            re_execution_times = re_execution_times_col.text_input("Re execution Times :", key="re_execution_times")
+            re_execute_target = re_execute_target_col.text_input("Target for re_execution orders :", key="re_execute_target")
+            re_execute_sl = re_execute_sl_col.text_input("SL for re_execution orders :", key="re_execute_sl")
+
+        directional_execution = st.toggle(label="Directional Execution", key="directional_execution", help="When you are working with legs which execute separately will consider first one as the right leg and discard all the pending orders")
+
+
+        trade_plotting = st.toggle(label="Trades Plotting", key="trade_plotting")
+
 
 
     mtm_target, mtm_stoploss = st.columns(2)

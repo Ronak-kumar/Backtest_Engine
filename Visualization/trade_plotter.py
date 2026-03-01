@@ -50,14 +50,15 @@ class ProfessionalTradeAnalystPlotter:
         self.orders_df = orders_df.copy()
         self.spot_df = spot_df.copy()
         self.current_date = self.spot_df["Timestamp"].iloc[-1].date()
-        # self.spot_df = pd.concat([prev_day_df, self.spot_df])
+        self.spot_df = pd.concat([prev_day_df, self.spot_df])
         self.strategy_name = strategy_name
         # Indicator visibility states (default: all visible)
         self.indicator_visibility = {
             'supertrend': False,
             'pivot_points': False,
             'rsi': True,
-            'adx': True
+            'adx': True,
+            'macd': True  # ← ADD THIS
         }
         self._prepare_data()
         self._calculate_indicators()
@@ -191,7 +192,23 @@ class ProfessionalTradeAnalystPlotter:
         self.spot_df['R2'] = pivot_data['R2'].values
         self.spot_df['S1'] = pivot_data['S1'].values
         self.spot_df['S2'] = pivot_data['S2'].values
-        
+
+        # Calculate MACD (12, 26, 9 - standard defaults)
+        if PANDAS_TA_AVAILABLE:
+            df.ta.macd(fast=12, slow=26, signal=9, append=True)
+            self.spot_df['MACD'] = df['MACD_12_26_9'].values
+            self.spot_df['MACD_signal'] = df['MACDs_12_26_9'].values
+            self.spot_df['MACD_hist'] = df['MACDh_12_26_9'].values
+        else:
+            ema_fast = df['Close'].ewm(span=12, adjust=False).mean()
+            ema_slow = df['Close'].ewm(span=26, adjust=False).mean()
+            macd_line = ema_fast - ema_slow
+            signal_line = macd_line.ewm(span=9, adjust=False).mean()
+            self.spot_df['MACD'] = macd_line.values
+            self.spot_df['MACD_signal'] = signal_line.values
+            self.spot_df['MACD_hist'] = (macd_line - signal_line).values
+
+        self.spot_df = self.spot_df[self.spot_df['Timestamp'].dt.date == self.current_date]
         # Reset index if needed
         if df.index.name == "Timestamp":
             df.reset_index(inplace=True)
@@ -344,11 +361,12 @@ class ProfessionalTradeAnalystPlotter:
             rows=5, cols=1,
             shared_xaxes=True,
             vertical_spacing=0.08,
-            row_heights=[0.40, 0.15, 0.15, 0, 0.30],
+            row_heights=[0.50, 0.20, 0.15, 0.20, 0.20],
             subplot_titles=(
-                "<b>Price Action & Order Execution</b>", 
+                "<b>Price Action & Order Execution</b>",
                 "<b>RSI (14)</b>",
                 "<b>ADX (14)</b>",
+                "<b>MACD (14)</b>",
                 "",
                 "<b>Trade Performance (Cumulative P&L)</b>"
             ),
@@ -776,7 +794,60 @@ class ProfessionalTradeAnalystPlotter:
             # Add ADX level (25) - TradingView style
             fig.add_hline(y=25, line_dash="dash", line_color="#FFA726", line_width=1,
                          annotation_text="Strong Trend (25)", row=3, col=1)
-        
+
+        # ============================================================
+        # LAYER 9: MACD INDICATOR
+        # ============================================================
+        if 'MACD' in self.spot_df.columns:
+            macd_visible = True if self.indicator_visibility['macd'] else 'legendonly'
+
+            # Histogram colors
+            hist_colors = [
+                "#26a69a" if v >= 0 else "#ef5350"
+                for v in self.spot_df["MACD_hist"].fillna(0)
+            ]
+
+            fig.add_trace(
+                go.Bar(
+                    x=self.spot_df["Timestamp"],
+                    y=self.spot_df["MACD_hist"],
+                    name="MACD Histogram",
+                    marker_color=hist_colors,
+                    hovertemplate="<b>MACD Hist</b><br>Time: %{x}<br>Value: %{y:.4f}<extra></extra>",
+                    showlegend=True,
+                    visible=macd_visible,
+                    opacity=0.6
+                ),
+                row=4, col=1
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=self.spot_df["Timestamp"],
+                    y=self.spot_df["MACD"],
+                    mode="lines",
+                    name="MACD Line",
+                    line=dict(color="#2196F3", width=1.5),
+                    hovertemplate="<b>MACD</b><br>Time: %{x}<br>MACD: %{y:.4f}<extra></extra>",
+                    showlegend=True,
+                    visible=macd_visible
+                ),
+                row=4, col=1
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=self.spot_df["Timestamp"],
+                    y=self.spot_df["MACD_signal"],
+                    mode="lines",
+                    name="Signal Line",
+                    line=dict(color="#FF9800", width=1.5, dash="dash"),
+                    hovertemplate="<b>Signal</b><br>Time: %{x}<br>Signal: %{y:.4f}<extra></extra>",
+                    showlegend=True,
+                    visible=macd_visible
+                ),
+                row=4, col=1
+            )
+            fig.add_hline(y=0, line_dash="dot", line_color="#9E9E9E", line_width=0.8, row=4, col=1)
+
         # ============================================================
         # LAYER 9: PERFORMANCE METRICS (Cumulative P&L)
         # ============================================================
@@ -965,6 +1036,12 @@ class ProfessionalTradeAnalystPlotter:
             tickfont=dict(size=11),
             range=[0, 100],
             row=3, col=1
+        )
+        fig.update_yaxes(
+            title_text="<b>MACD</b>",
+            title_font=dict(size=13, color="white"),
+            tickfont=dict(size=11),
+            row=4, col=1
         )
         fig.update_yaxes(
             title_text="<b>Cumulative P&L</b>",

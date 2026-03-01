@@ -1346,7 +1346,7 @@ with st.container():
 
         if condition_checker_toggle:
 
-            condition_type = condition_cola[0].selectbox("Condition Type:", ["Rolling_Straddle_Spot_Movement_Tracker", "Rolling_ATM_Premium_Straddle", "Weekly_Positional_With_Adjustments", "RSM_Threshold", "Non_Correlation", 'Delta_ADX', "V_Day", "Momentum1", "SMA", "Striker"],
+            condition_type = condition_cola[0].selectbox("Condition Type:", ["Rolling_Straddle_Spot_Movement_Tracker", "Rolling_ATM_Premium_Straddle", "Weekly_Positional_With_Adjustments", "RSM_Threshold", "Non_Correlation", 'Delta_ADX', "V_Day", "Momentum1", "SMA", "Striker", "RSI_EXECUTION"],
                                                          index=0,
                                                          key="condition_type")
             if condition_type == "Rolling_Straddle_Spot_Movement_Tracker":

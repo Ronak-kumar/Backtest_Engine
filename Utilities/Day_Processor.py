@@ -271,12 +271,6 @@ class DayProcessor:
         once_execution = self.entry_para_dict["re_execution_times"]
         directional_processing = self.entry_para_dict["directional_execution"]
 
-        directional_at_second_phase = self.entry_para_dict["directional_at_second_phase"]
-        third_phase_execution = self.entry_para_dict["third_phase_execution"]
-
-        self.first_phase = False
-        self.second_phase = False
-        self.third_phase = False
         self.expiry_offset_map = expiry_offset_map
 
         current_date = spot_df[0]["Timestamp"][0].date()
@@ -297,7 +291,6 @@ class DayProcessor:
                 except:
                     vix_value = 0
 
-            # print(f"Current Time: {current_time}, Spot Price: {spot_price}, VIX: {vix_value}")
 
             # Time Debugger
             if current_time.date() == dt.strptime('28/01/2025', "%d/%m/%Y").date():
@@ -329,13 +322,7 @@ class DayProcessor:
                         logger.info(f"Stop loss triggered exit for position {standing_position.leg_id} at {current_time}")
                         self.pnl_manager.close_position(position_id=standing_position.position_id, exit_timestamp=current_time,
                                                         exit_price=exit_price, exit_reason=summary)
-                        
-                        # ============================================================
-                        # PHASE Additional: f sl hit in the first hour exit day (Single time per day)
-                        # ============================================================
-                        # first_execution_timestamp = dt.strptime('09:15:00', "%H:%M:%S")
-                        # if current_time.time() <= (first_execution_timestamp + relativedelta(minutes=60)).time():
-                        #     self.day_breaker = True
+
                 
                 standing_positions_list = list(self.pnl_manager.active_positions.values())
                 for standing_position in standing_positions_list:
@@ -347,32 +334,6 @@ class DayProcessor:
                         self.pnl_manager.close_position(position_id=standing_position.position_id, exit_timestamp=current_time,
                                                         exit_price=exit_price, exit_reason=summary)
 
-            # ============================================================
-            # PHASE Additional: f sl hit in the first hour exit day (Single time per day)
-            # ============================================================
-            # ### If sl hit in the first hour exit day ###
-            # if len(self.order_book['Timestamp']) != 0:
-            #     first_execution_timestamp = self.order_book['Timestamp'][0]
-            #     if first_execution_timestamp + relativedelta(minutes=60) == current_time:
-            #         closed_positions_list = list(self.pnl_manager.closed_positions)
-            #         for closed_position in closed_positions_list:
-            #             stoploss_based_closing = "SL" in closed_position.exit_reason
-
-            #             if stoploss_based_closing:
-            #                 self.day_breaker = True
-
-            #                 if len(self.pnl_manager.active_positions) > 0:
-            #                     # Check stop loss for all active positions
-            #                     standing_positions_list = list(self.pnl_manager.active_positions.values())
-            #                     for standing_position in standing_positions_list:
-            #                         summary = f"First hour Stoploss Exit triggered for leg {standing_position.unique_leg_id} closing position at ltp of {standing_position.current_ltp}"
-            #                         exit_price = standing_position.current_ltp
-            #                         logger.info(
-            #                             f"First hour Stoploss Exit for position {standing_position.leg_id} at {current_time}")
-            #                         self.pnl_manager.close_position(position_id=standing_position.position_id,
-            #                                                         exit_timestamp=current_time,
-            #                                                         exit_price=exit_price, exit_reason=summary)
-                        
             
             # Re-entry logic for positions that were closed
             if len(self.pnl_manager.closed_positions) > 0 and not self.day_breaker:
@@ -418,20 +379,10 @@ class DayProcessor:
                             record_entry = True
                             reentry_execution_type = ""
 
-                            # order_to_execute["leg_hopping_count_tgt"] -= 1
-                            # leg_id = order_to_execute.get("leg_tobe_executed_on_target", "").replace(".", "_")
-                            # order_to_execute = self.order_sequence_mapper_con.get_order(leg_id)
-
                         elif (stoploss_based_closing or target_based_closing) and order_to_execute.get("leg_hopping_count_next_leg", 0) > 0 and order_to_execute.get("next_lazy_leg_to_be_executed", False):
                             order_to_execute, leg_id =  self.order_sequence_mapper_con.get_next_order(order_to_execute, leg_id, hopping_type="leg_hopping_count_next_leg", leg_to_fetch="next_lazy_leg_to_be_executed")
                             record_entry = True
                             reentry_execution_type = ""
-
-                            # order_to_execute["leg_hopping_count_next_leg"] -= 1
-                            # leg_id = order_to_execute.get("next_lazy_leg_to_be_executed", "").replace(".", "_")
-                            # order_to_execute = self.order_sequence_mapper_con.get_order(leg_id)
-
-
 
 
                     if record_entry:
@@ -460,69 +411,24 @@ class DayProcessor:
                     break
 
 
-            if self.entry_para_dict["condition_checker_toggle"] and self.entry_para_dict["condition_type"] == "RSI_EXECUTION":
-                # ============================================================
-                # PHASE Additional: When all orders ends and no standing positions reexecute positions once again by rsi execution
-                # ============================================================
-                # if self.pnl_manager.get_total_pnl().get('total_pnl', 0) < 0:
-                if (len(self.pnl_manager.active_positions) == 0 and self.initial_entry and once_execution > 0 and (len(self.pnl_manager.closed_positions) >= 2)):
-                    if not self.rsi_executor_con.rsi_execution:
-                        self.rsi_executor_con.rsi_execution = True
 
-                    if self.rsi_executor_con.rsi_execution:
-                        if self.rsi_executor_con.executor(spot_df=spot_df, timestamp=current_time):
-                            self.entry_manager.pending_orders = {}
-                            logger.info(f"RSI Condition Triggered for re-execution at {current_time.time()}")
-                            self.rsi_executor_con.rsi_execution = False
-                            self.entry_time = current_time
-                            self.initial_entry = False
-                            self.second_phase = True
+            # ============================================================
+            # PHASE Additional: When all orders ends and no standing positions reexecute positions once again (Single time per day)
+            # ============================================================
+            if (len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(self.entry_manager.pending_orders) == 0 and once_execution > 0):
+                self.entry_time = current_time
+                self.initial_entry = False
+                once_execution -= 1
+                self.second_phase = True
 
-                            for leg_id, order in self.order_sequence_mapper_con.main_orders.items():
-                                self.order_sequence_mapper_con.main_orders[leg_id]["stoploss_value"] = self.entry_para_dict["re_execute_sl"]/100
-                                self.order_sequence_mapper_con.main_orders[leg_id]["target_value"] = self.entry_para_dict["re_execute_target"]/100
-                
-                elif self.rsi_executor_con.rsi_execution and len(self.pnl_manager.active_positions) == 1 and (len(self.pnl_manager.closed_positions) >= 2):
-                    self.rsi_executor_con.reset()
-                    once_execution -= 1
-
-            else:
-                # ============================================================
-                # PHASE Additional: When all orders ends and no standing positions reexecute positions once again (Single time per day)
-                # ============================================================
-                if (len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(self.entry_manager.pending_orders) == 0 and once_execution > 0):
-                    self.entry_time = current_time
-                    self.initial_entry = False
-                    once_execution -= 1
-                    self.second_phase = True
-
-                    for leg_id, order in self.order_sequence_mapper_con.main_orders.items():
-                        self.order_sequence_mapper_con.main_orders[leg_id]["stoploss_value"] = self.entry_para_dict["re_execute_sl"]/100
-                        self.order_sequence_mapper_con.main_orders[leg_id]["target_value"] = self.entry_para_dict["re_execute_target"]/100
-
-            ### Making directional at second phase ###
-            if directional_at_second_phase & self.second_phase:
-                directional_processing = True
-                self.second_phase = False
+                for leg_id, order in self.order_sequence_mapper_con.main_orders.items():
+                    self.order_sequence_mapper_con.main_orders[leg_id]["stoploss_value"] = self.entry_para_dict["re_execute_sl"]/100
+                    self.order_sequence_mapper_con.main_orders[leg_id]["target_value"] = self.entry_para_dict["re_execute_target"]/100
 
             if directional_processing:
                 if (len(self.pnl_manager.active_positions) == 1 and self.initial_entry and len(self.entry_manager.pending_orders) == 1):
                     self.entry_manager.pending_orders = {}
                     self.third_phase = True
-
-            if third_phase_execution:
-                if self.third_phase:
-                    if (len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(
-                            self.entry_manager.pending_orders) == 0):
-                        self.entry_time = current_time
-                        self.initial_entry = False
-                        directional_processing = False
-                        self.third_phase = False
-
-                        for leg_id, order in self.order_sequence_mapper_con.main_orders.items():
-                            self.order_sequence_mapper_con.main_orders[leg_id]["stoploss_value"] = 0.1
-                            self.order_sequence_mapper_con.main_orders[leg_id]["target_value"] = 0.8
-
 
             # ============================================================
             # PHASE 1: ORDER SUBMISSION (at entry time)
@@ -586,13 +492,7 @@ class DayProcessor:
                             # Get leg_id and order
                             executed_leg_id = self.TRADE_DICT['Leg_id'][position_idx]
                             leg_order = self.order_sequence_mapper_con._get_order(executed_leg_id)
-                            # leg_order = self.orders[executed_leg_id]
 
-                            # if leg_order["option_type"] == "PE" and spot_price < spot_df[0]["Open"][0]:
-                            #     continue
-                            # elif leg_order["option_type"] == "CE" and spot_price > spot_df[0]["Open"][0]:
-                            #     continue
-                            
                             # Create position in PNL Manager
                             self.pnl_manager.create_position(
                                 leg_id=executed_leg_id,
@@ -640,9 +540,6 @@ class DayProcessor:
             # ============================================================
             if current_time.time() >= self.exit_time.time() or self.day_breaker:
                 logger.info("Strategy exit time reached. Exiting day loop.")
-
-
-
 
                 # Closing all the standing position as engine running on intraday setup
                 if len(self.pnl_manager.active_positions) > 0:  

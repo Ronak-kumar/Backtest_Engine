@@ -43,6 +43,11 @@ nifty:
 
 
 sensex:
+  - from: 2015-01-01
+    to: 2024-12-26
+    size: 10
+
+
   - from: 2024-12-27
     to: null
     size: 20

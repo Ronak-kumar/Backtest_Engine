@@ -261,6 +261,8 @@ def _load_engine_main_entry_parameters(entry_para_dict):
     result['re_execute_target'] = float(entry_para_dict.get("re_execute_target", 0.0) or 0.0)
     result['directional_execution'] = str(entry_para_dict.get("directional_execution", "")).upper() == "TRUE"
     result['trade_plotting'] = str(entry_para_dict.get("trade_plotting", "")).upper() == "TRUE"
+    result['directional_at_second_phase'] = str(entry_para_dict.get("directional_at_second_phase", "")).upper() == "TRUE"
+    result['third_phase_execution'] = str(entry_para_dict.get("third_phase_execution", "")).upper() == "TRUE"
 
     # ========== Rolling Straddle Slice Time ==========
     try:

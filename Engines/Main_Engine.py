@@ -30,11 +30,11 @@ from Managers.options_data_manager import DayOptionFrame
 from Database_manager.data_extractor import MonthlyParquetBuilder
 from Managers.EOD_file_manager import EODFileManager
 import time
-
+from Utilities.build_tradelog_full import generate_trade_logs
 start_time = time.time()
 ### Parameters Loading Section ###
 param_csv_file = sys.argv[1].replace("\\", "/")
-# param_csv_file = r"D:\Development\Coding_Projects\market_project\Backtest_Engine\strategies\sm_directional_execution_reexecution1_rsi_based\entry_parameter_0120_0226_0916_1528_nifty.csv".replace("\\", "/")
+# param_csv_file = r"D:\Development\Coding_Projects\market_project\Backtest_Engine\strategies\sm_normal_full_execution_with gate6\entry_parameter_0120_0326_0916_1527_nifty.csv".replace("\\", "/")
 param_csv_file_dir = ("/").join(param_csv_file.split("/")[:-1])
 entry_para_dict = _load_engine_main_entry_parameters(load_parameters_from_csv(param_csv_file))
 
@@ -253,8 +253,7 @@ for current_date in trading_days:
     day_processor_con.options_frame_initilizer()
 
     try:
-
-        day_processor_con.process_day(spot_df, vix_df, prev_spot_required_data, charges_params_dict, logger, synthetic_df)
+        day_processor_con.process_day(spot_df, vix_df, prev_spot_required_data, charges_params_dict, logger, synthetic_df, expiry_offset_map=expiry_offset_map)
 
     except Exception as e:
         logger.info(f"Unable to generate date {current_date} for reason {e}")
@@ -270,9 +269,10 @@ EODFileManager_con = EODFileManager(strategy_save_dir=strategy_save_dir)
 eod_file_path = EODFileManager_con.realized_file_creator(indices=entry_para_dict['indices'])
 drawdown_cal(path=eod_file_path)
 day_ohlc_spot = full_spot_df.to_pandas().set_index('Timestamp').resample("D").agg({"Open": 'first', "High": "max", "Low": "min", "Close":'last'}).dropna()
-
 day_ohlc_spot.to_csv(f"{strategy_save_dir}/Spot_Day_OHLC.csv")
 heat_map(filepath=eod_file_path, indices=entry_para_dict['indices'])
+generate_trade_logs(strategy_save_dir)
+
 print("Total Execution Time: %s seconds" % (time.time() - start_time))
 time.sleep(5)
 

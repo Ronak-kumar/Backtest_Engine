@@ -11,6 +11,9 @@ class RSIExecution:
 
     def executor(self, spot_df, timestamp):
         rsi_value = spot_df.filter(pl.col('Timestamp') == timestamp).select('RSI_14').item()
+        if rsi_value == None:
+            return False
+
         if rsi_value <= 30 or rsi_value >= 70:
             if self.rsi_value == 0:
                 self.rsi_value = rsi_value

@@ -302,6 +302,10 @@ def save_data_to_dict(entry_time, exit_time, indice, filename):
     data['directional_execution'] = directional_execution
     data['trade_plotting'] = trade_plotting
 
+    data['directional_at_second_phase'] = directional_at_second_phase
+    data['third_phase_execution'] = third_phase_execution
+
+
 
 
     with open(filename, 'w', newline='') as csvfile:
@@ -1877,6 +1881,8 @@ with st.container():
 
         directional_execution = st.toggle(label="Directional Execution", key="directional_execution", help="When you are working with legs which execute separately will consider first one as the right leg and discard all the pending orders")
 
+        directional_at_second_phase = st.toggle(label="Directional when second phase triggered", key="directional_at_second_phase")
+        third_phase_execution = st.toggle(label="Third Phase Execution", key="third_phase_execution")
 
         trade_plotting = st.toggle(label="Trades Plotting", key="trade_plotting")
 

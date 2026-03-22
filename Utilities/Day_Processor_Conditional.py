@@ -36,13 +36,13 @@ from Conditional_Execution.RSI_Execution import RSIExecution
 class DayProcessor:
     """
     Day Processor coordinates all intraday trading operations using composition.
-    
+
     This class composes four main managers:
     - EntryManager: Handles all entry strategies
-    - ExitManager: Handles all exit strategies  
+    - ExitManager: Handles all exit strategies
     - PNLManager: Tracks positions and calculates P&L
     - ReentryManager: Handles re-entry strategies
-    
+
     Attributes:
         entry_time: Strategy entry time
         exit_time: Strategy exit time
@@ -63,24 +63,24 @@ class DayProcessor:
     def __init__(self, current_date_str: str, entry_para_dict: dict, options_extractor_con: object):
         """
         Initialize DayProcessor with managers and trading parameters.
-        
+
         Args:
             current_date_str: Current date in 'YYYY-MM-DD' format
             entry_para_dict: Dictionary containing all strategy parameters
         """
         # Day start time & end time
         self.entry_time = dt.strptime(
-            f"{current_date_str}  {entry_para_dict['strategy_entry_time']}", 
+            f"{current_date_str}  {entry_para_dict['strategy_entry_time']}",
             "%Y-%m-%d %H:%M:%S"
         )
         self.exit_time = dt.strptime(
-            f"{current_date_str}  {entry_para_dict['strategy_exit_time']}", 
+            f"{current_date_str}  {entry_para_dict['strategy_exit_time']}",
             "%Y-%m-%d %H:%M:%S"
         )
-        
+
         # Store entry parameters
         self.entry_para_dict = entry_para_dict
-        
+
         # Initialize managers
         # Note: entry_manager will be initialized in process_day() when intraday_df_dict is available
         self.entry_manager = None
@@ -89,10 +89,11 @@ class DayProcessor:
         self.reentry_manager = ReentryManager()
         self.inicator_generator = None
 
-        if self.entry_para_dict["condition_checker_toggle"] and self.entry_para_dict["condition_type"] == "RSI_EXECUTION":
+        if self.entry_para_dict["condition_checker_toggle"] and self.entry_para_dict[
+            "condition_type"] == "RSI_EXECUTION":
             self.rsi_executor_con = RSIExecution()
 
-        # Trade dictionary 
+        # Trade dictionary
         self.TRADE_DICT = {
             "Leg_id": [],
             'Entry_timestamp': [],
@@ -110,8 +111,8 @@ class DayProcessor:
             'Position_type': [],
             'Trailing': []
         }
-        
-        # Order book dictionary 
+
+        # Order book dictionary
         self.order_book = {
             'Timestamp': [],
             'Ticker': [],
@@ -119,8 +120,8 @@ class DayProcessor:
             'Price': [],
             'Summary': []
         }
-        
-        # Closed position dictionary 
+
+        # Closed position dictionary
         self.CLOSE_DICT = {
             'Entry_timestamp': [],
             'Timestamp': [],
@@ -132,16 +133,14 @@ class DayProcessor:
             'Lot_size': [],
             'PnL': []
         }
-        
+
         # Day state flags
         self.day_breaker = False
         self.entry_spot = None
-        
+
         # Engine flags
         self.initial_entry = False
         self.overall_tp_activated = False
-
-
 
         self.orders = {}
         self.lazy_leg_dict = {}
@@ -150,29 +149,27 @@ class DayProcessor:
 
         self.day_option_frame_con = options_extractor_con
 
-
     def options_frame_initilizer(self):
         intraday_options_df = {}
         for expiry_type in self.expiry_types:
             intraday_options_df[expiry_type] = pl.DataFrame()
         self.day_option_frame_con.intraday_options_df = intraday_options_df
 
-
     def _initialize_entry_manager(
-        self,
-        options_extractor_con: object,
-        spot_df: pd.DataFrame,
-        logger: Any,
-        miss_con: Any,
-        straddle_filepath: str = "",
-        rolling_straddle_slice_time: Optional[dt.time] = None
+            self,
+            options_extractor_con: object,
+            spot_df: pd.DataFrame,
+            logger: Any,
+            miss_con: Any,
+            straddle_filepath: str = "",
+            rolling_straddle_slice_time: Optional[dt.time] = None
     ):
         """
         Initialize the unified entry manager with all required parameters.
-        
+
         This should be called before process_day() or within process_day()
         when all data is available.
-        
+
         Args:
             intraday_df_dict: Dictionary of intraday dataframes by expiry
             spot_df: Spot price dataframe
@@ -185,7 +182,7 @@ class DayProcessor:
             # Already initialized, reset if needed
             self.entry_manager.reset_strategies()
             return
-        
+
         # Extract configuration from entry_para_dict
         # These keys match the parameter parser output and config structure
         base = self.entry_para_dict.get('base_symbol_spread', 50)
@@ -194,7 +191,7 @@ class DayProcessor:
         lotsize = self.entry_para_dict.get('symbol_lotsize', 50)  # Set from config in Main_Engine
         StoplossCalMode = self.entry_para_dict.get('StoplossCalMode', 'Close')  # From parameter_parser
         indices = self.entry_para_dict.get('indices', 'NIFTY')
-        
+
         # ADD: New entry manager initialization
         self.entry_manager = EntryManager(
             options_extractor=options_extractor_con,
@@ -209,28 +206,28 @@ class DayProcessor:
             },
             logger=None  # Pass logger if you have one
         )
-    
+
     def process_day(
-        self,
-        spot_df: pl.DataFrame,
-        vix_df: pl.DataFrame,
-        prev_day_df: pl.DataFrame,
-        charges_params_dict: Dict[str, Any],
-        logger: Any,
-        synthetic_df: pd.DataFrame,
-        expiry_offset_map: Dict[str, int],
-        intraday_df_dict: Optional[Dict[str, pd.DataFrame]] = None,
-        miss_con: Optional[Any] = None,
-        straddle_filepath: str = "",
-        rolling_straddle_slice_time: Optional[dt.time] = None
+            self,
+            spot_df: pl.DataFrame,
+            vix_df: pl.DataFrame,
+            prev_day_df: pl.DataFrame,
+            charges_params_dict: Dict[str, Any],
+            logger: Any,
+            synthetic_df: pd.DataFrame,
+            expiry_offset_map: Dict[str, int],
+            intraday_df_dict: Optional[Dict[str, pd.DataFrame]] = None,
+            miss_con: Optional[Any] = None,
+            straddle_filepath: str = "",
+            rolling_straddle_slice_time: Optional[dt.time] = None
     ):
         """
         Main method to process the trading day.
-        
+
         This method orchestrates the entire trading day by coordinating
         the entry, exit, P&L tracking, and re-entry strategies through
         their respective managers.
-        
+
         Args:
             spot_df: Spot price dataframe (polars DataFrame)
             vix_df: VIX dataframe (polars DataFrame)
@@ -245,12 +242,12 @@ class DayProcessor:
         """
         # Initialize entry manager if not already initialized
         if self.entry_manager is None:
-            #if intraday_df_dict is None or miss_con is None:
+            # if intraday_df_dict is None or miss_con is None:
             #    raise ValueError(
             #        "intraday_df_dict and miss_con are required for entry manager initialization. "
             #        "Please provide them in process_day() call."
             #    )
-            
+
             self._initialize_entry_manager(
                 options_extractor_con=self.day_option_frame_con,
                 spot_df=spot_df,
@@ -261,11 +258,14 @@ class DayProcessor:
             )
 
             self.order_sequence_mapper_con = OrderSequenceMapper()
-            self.orders, self.lazy_leg_dict = self.order_sequence_mapper_con.legid_mapping(self.orders, self.lazy_leg_dict)
+            self.orders, self.lazy_leg_dict = self.order_sequence_mapper_con.legid_mapping(self.orders,
+                                                                                           self.lazy_leg_dict)
             self.pnl_manager.charges_params = charges_params_dict
 
             # if self.entry_para_dict["condition_checker_toggle"] and self.entry_para_dict["condition_type"] == "RSI_EXECUTION":
-            self.indicator_generator = IndicatorGenerator(current_day_df=spot_df.to_pandas(), prev_day_df=prev_day_df.to_pandas(), strategy_save_dir =self.strategy_save_dir)
+            self.indicator_generator = IndicatorGenerator(current_day_df=spot_df.to_pandas(),
+                                                          prev_day_df=prev_day_df.to_pandas(),
+                                                          strategy_save_dir=self.strategy_save_dir)
             spot_df = self.indicator_generator.generate_indicators()
 
         once_execution = self.entry_para_dict["re_execution_times"]
@@ -305,16 +305,15 @@ class DayProcessor:
                 if current_time.time() == dt.strptime('14:10:00', "%H:%M:%S").time():
                     debug = ""
 
-
             # ============================================================
             # UPDATE POSITIONS (if any exist)
             # ============================================================
             if len(self.pnl_manager.active_positions) > 0 or len(self.pnl_manager.closed_positions) > 0:
                 # Update P&L for open positions
                 self.TRADE_DICT = self.pnl_manager.update_all_ltps(current_timestamp=timestamp,
-                                                TRADE_DICT=self.TRADE_DICT,
-                                                options_extractor_con=self.day_option_frame_con)
-                
+                                                                   TRADE_DICT=self.TRADE_DICT,
+                                                                   options_extractor_con=self.day_option_frame_con)
+
             # ============================================================
             # CHECKING POSITIONS CLOSING
             # ============================================================
@@ -322,29 +321,38 @@ class DayProcessor:
                 # Check stop loss for all active positions
                 standing_positions_list = list(self.pnl_manager.active_positions.values())
                 for standing_position in standing_positions_list:
-                    stop_loss_triggers, summary = self.exit_manager.check_specific_exit(exit_type="STOPLOSS", position=standing_position,
-                                                current_timestamp=current_time, current_ltp=spot_price, spot_df=spot_df)
+                    stop_loss_triggers, summary = self.exit_manager.check_specific_exit(exit_type="STOPLOSS",
+                                                                                        position=standing_position,
+                                                                                        current_timestamp=current_time,
+                                                                                        current_ltp=spot_price,
+                                                                                        spot_df=spot_df)
                     if stop_loss_triggers:
                         exit_price = standing_position.stop_loss
-                        logger.info(f"Stop loss triggered exit for position {standing_position.leg_id} at {current_time}")
-                        self.pnl_manager.close_position(position_id=standing_position.position_id, exit_timestamp=current_time,
+                        logger.info(
+                            f"Stop loss triggered exit for position {standing_position.leg_id} at {current_time}")
+                        self.pnl_manager.close_position(position_id=standing_position.position_id,
+                                                        exit_timestamp=current_time,
                                                         exit_price=exit_price, exit_reason=summary)
-                        
+
                         # ============================================================
                         # PHASE Additional: f sl hit in the first hour exit day (Single time per day)
                         # ============================================================
                         # first_execution_timestamp = dt.strptime('09:15:00', "%H:%M:%S")
                         # if current_time.time() <= (first_execution_timestamp + relativedelta(minutes=60)).time():
                         #     self.day_breaker = True
-                
+
                 standing_positions_list = list(self.pnl_manager.active_positions.values())
                 for standing_position in standing_positions_list:
-                    target_triggers, summary = self.exit_manager.check_specific_exit(exit_type="TARGET", position=standing_position,
-                            current_timestamp=current_time, current_ltp=spot_price, spot_df=spot_df)
+                    target_triggers, summary = self.exit_manager.check_specific_exit(exit_type="TARGET",
+                                                                                     position=standing_position,
+                                                                                     current_timestamp=current_time,
+                                                                                     current_ltp=spot_price,
+                                                                                     spot_df=spot_df)
                     if target_triggers:
                         exit_price = standing_position.target_price
                         logger.info(f"Target triggered exit for position {standing_position.leg_id} at {current_time}")
-                        self.pnl_manager.close_position(position_id=standing_position.position_id, exit_timestamp=current_time,
+                        self.pnl_manager.close_position(position_id=standing_position.position_id,
+                                                        exit_timestamp=current_time,
                                                         exit_price=exit_price, exit_reason=summary)
 
             # ============================================================
@@ -372,15 +380,14 @@ class DayProcessor:
             #                         self.pnl_manager.close_position(position_id=standing_position.position_id,
             #                                                         exit_timestamp=current_time,
             #                                                         exit_price=exit_price, exit_reason=summary)
-                        
-            
+
             # Re-entry logic for positions that were closed
             if len(self.pnl_manager.closed_positions) > 0 and not self.day_breaker:
                 closed_positions_list = list(self.pnl_manager.closed_positions)
                 for closed_position in closed_positions_list:
                     if closed_position.exit_timestamp != current_time:
                         continue  # Only check re-entry on the timestamp when position was closed
-                    
+
                     record_entry = False
                     leg_id = closed_position.leg_id
                     order_to_execute = closed_position.leg_dict
@@ -390,7 +397,8 @@ class DayProcessor:
 
                     # Rentry for sl based closed position
                     if stoploss_based_closing and order_to_execute.get("rentry_sl_toggle", False):
-                        if order_to_execute.get("total_sl_rentry", 0) != None and order_to_execute.get("total_sl_rentry", 0) > 0:
+                        if order_to_execute.get("total_sl_rentry", 0) != None and order_to_execute.get(
+                                "total_sl_rentry", 0) > 0:
                             self.order_sequence_mapper_con.hopping_count_manager(leg_id, "total_sl_rentry")
                             order_to_execute['total_sl_rentry'] -= 1
                             reentry_execution_type = "IMMEDIATE"
@@ -398,23 +406,33 @@ class DayProcessor:
 
                     # Rentry for target based closed position
                     elif target_based_closing and order_to_execute.get("rentry_tgt_toggle", False):
-                        if order_to_execute.get("total_tgt_rentry", 0) != None and order_to_execute.get("total_tgt_rentry", 0) > 0:
+                        if order_to_execute.get("total_tgt_rentry", 0) != None and order_to_execute.get(
+                                "total_tgt_rentry", 0) > 0:
                             self.order_sequence_mapper_con.hopping_count_manager(leg_id, "total_tgt_rentry")
                             order_to_execute['total_tgt_rentry'] -= 1
                             reentry_execution_type = "IMMEDIATE"
                             record_entry = True
 
-
-                    # lazy legs execution 
+                    # lazy legs execution
                     if not record_entry:
-                        if stop_loss_triggers and order_to_execute.get("leg_hopping_count_sl", 0) > 0 and order_to_execute.get("leg_tobe_executed_on_sl", False):
-                            order_to_execute, leg_id =  self.order_sequence_mapper_con.get_next_order(order_to_execute, leg_id, hopping_type="leg_hopping_count_sl", leg_to_fetch="leg_tobe_executed_on_sl")
+                        if stop_loss_triggers and order_to_execute.get("leg_hopping_count_sl",
+                                                                       0) > 0 and order_to_execute.get(
+                                "leg_tobe_executed_on_sl", False):
+                            order_to_execute, leg_id = self.order_sequence_mapper_con.get_next_order(order_to_execute,
+                                                                                                     leg_id,
+                                                                                                     hopping_type="leg_hopping_count_sl",
+                                                                                                     leg_to_fetch="leg_tobe_executed_on_sl")
                             record_entry = True
                             reentry_execution_type = ""
 
 
-                        elif target_based_closing and order_to_execute.get("leg_hopping_count_tgt", 0) > 0 and order_to_execute.get("leg_tobe_executed_on_target", False):
-                            order_to_execute, leg_id =  self.order_sequence_mapper_con.get_next_order(order_to_execute, leg_id, hopping_type="leg_hopping_count_tgt", leg_to_fetch="leg_tobe_executed_on_target")
+                        elif target_based_closing and order_to_execute.get("leg_hopping_count_tgt",
+                                                                           0) > 0 and order_to_execute.get(
+                                "leg_tobe_executed_on_target", False):
+                            order_to_execute, leg_id = self.order_sequence_mapper_con.get_next_order(order_to_execute,
+                                                                                                     leg_id,
+                                                                                                     hopping_type="leg_hopping_count_tgt",
+                                                                                                     leg_to_fetch="leg_tobe_executed_on_target")
                             record_entry = True
                             reentry_execution_type = ""
 
@@ -422,17 +440,19 @@ class DayProcessor:
                             # leg_id = order_to_execute.get("leg_tobe_executed_on_target", "").replace(".", "_")
                             # order_to_execute = self.order_sequence_mapper_con.get_order(leg_id)
 
-                        elif (stoploss_based_closing or target_based_closing) and order_to_execute.get("leg_hopping_count_next_leg", 0) > 0 and order_to_execute.get("next_lazy_leg_to_be_executed", False):
-                            order_to_execute, leg_id =  self.order_sequence_mapper_con.get_next_order(order_to_execute, leg_id, hopping_type="leg_hopping_count_next_leg", leg_to_fetch="next_lazy_leg_to_be_executed")
+                        elif (stoploss_based_closing or target_based_closing) and order_to_execute.get(
+                                "leg_hopping_count_next_leg", 0) > 0 and order_to_execute.get(
+                                "next_lazy_leg_to_be_executed", False):
+                            order_to_execute, leg_id = self.order_sequence_mapper_con.get_next_order(order_to_execute,
+                                                                                                     leg_id,
+                                                                                                     hopping_type="leg_hopping_count_next_leg",
+                                                                                                     leg_to_fetch="next_lazy_leg_to_be_executed")
                             record_entry = True
                             reentry_execution_type = ""
 
                             # order_to_execute["leg_hopping_count_next_leg"] -= 1
                             # leg_id = order_to_execute.get("next_lazy_leg_to_be_executed", "").replace(".", "_")
                             # order_to_execute = self.order_sequence_mapper_con.get_order(leg_id)
-
-
-
 
                     if record_entry:
                         # registring oredrs in entry manager
@@ -444,28 +464,29 @@ class DayProcessor:
                                 spot_price=spot_price,
                                 execution_type=reentry_execution_type
                             )
-                            
+
                             if order_id:
                                 logger.info(f"Submitted order: {order_id} for {leg_id}")
                             else:
                                 logger.warning(f"Failed to submit order for {leg_id}")
-                                
+
                         except Exception as e:
                             logger.error(f"Error submitting order for {leg_id}: {e}")
                             self.day_breaker = True
                             break
-                
+
                 if self.day_breaker:
                     logger.info("Day breaker activated. Exiting day loop.")
                     break
 
-
-            if self.entry_para_dict["condition_checker_toggle"] and self.entry_para_dict["condition_type"] == "RSI_EXECUTION":
+            if self.entry_para_dict["condition_checker_toggle"] and self.entry_para_dict[
+                "condition_type"] == "RSI_EXECUTION":
                 # ============================================================
                 # PHASE Additional: When all orders ends and no standing positions reexecute positions once again by rsi execution
                 # ============================================================
                 # if self.pnl_manager.get_total_pnl().get('total_pnl', 0) < 0:
-                if (len(self.pnl_manager.active_positions) == 0 and self.initial_entry and once_execution > 0 and (len(self.pnl_manager.closed_positions) >= 2)):
+                if (len(self.pnl_manager.active_positions) == 0 and self.initial_entry and once_execution > 0 and (
+                        len(self.pnl_manager.closed_positions) >= 2)):
                     if not self.rsi_executor_con.rsi_execution:
                         self.rsi_executor_con.rsi_execution = True
 
@@ -479,10 +500,13 @@ class DayProcessor:
                             self.second_phase = True
 
                             for leg_id, order in self.order_sequence_mapper_con.main_orders.items():
-                                self.order_sequence_mapper_con.main_orders[leg_id]["stoploss_value"] = self.entry_para_dict["re_execute_sl"]/100
-                                self.order_sequence_mapper_con.main_orders[leg_id]["target_value"] = self.entry_para_dict["re_execute_target"]/100
-                
-                elif self.rsi_executor_con.rsi_execution and len(self.pnl_manager.active_positions) == 1 and (len(self.pnl_manager.closed_positions) >= 2):
+                                self.order_sequence_mapper_con.main_orders[leg_id]["stoploss_value"] = \
+                                self.entry_para_dict["re_execute_sl"] / 100
+                                self.order_sequence_mapper_con.main_orders[leg_id]["target_value"] = \
+                                self.entry_para_dict["re_execute_target"] / 100
+
+                elif self.rsi_executor_con.rsi_execution and len(self.pnl_manager.active_positions) == 1 and (
+                        len(self.pnl_manager.closed_positions) >= 2):
                     self.rsi_executor_con.reset()
                     once_execution -= 1
 
@@ -490,15 +514,18 @@ class DayProcessor:
                 # ============================================================
                 # PHASE Additional: When all orders ends and no standing positions reexecute positions once again (Single time per day)
                 # ============================================================
-                if (len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(self.entry_manager.pending_orders) == 0 and once_execution > 0):
+                if (len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(
+                        self.entry_manager.pending_orders) == 0 and once_execution > 0):
                     self.entry_time = current_time
                     self.initial_entry = False
                     once_execution -= 1
                     self.second_phase = True
 
                     for leg_id, order in self.order_sequence_mapper_con.main_orders.items():
-                        self.order_sequence_mapper_con.main_orders[leg_id]["stoploss_value"] = self.entry_para_dict["re_execute_sl"]/100
-                        self.order_sequence_mapper_con.main_orders[leg_id]["target_value"] = self.entry_para_dict["re_execute_target"]/100
+                        self.order_sequence_mapper_con.main_orders[leg_id]["stoploss_value"] = self.entry_para_dict[
+                                                                                                   "re_execute_sl"] / 100
+                        self.order_sequence_mapper_con.main_orders[leg_id]["target_value"] = self.entry_para_dict[
+                                                                                                 "re_execute_target"] / 100
 
             ### Making directional at second phase ###
             if directional_at_second_phase & self.second_phase:
@@ -506,7 +533,8 @@ class DayProcessor:
                 self.second_phase = False
 
             if directional_processing:
-                if (len(self.pnl_manager.active_positions) == 1 and self.initial_entry and len(self.entry_manager.pending_orders) == 1):
+                if (len(self.pnl_manager.active_positions) == 1 and self.initial_entry and len(
+                        self.entry_manager.pending_orders) == 1):
                     self.entry_manager.pending_orders = {}
                     self.third_phase = True
 
@@ -523,14 +551,13 @@ class DayProcessor:
                             self.order_sequence_mapper_con.main_orders[leg_id]["stoploss_value"] = 0.1
                             self.order_sequence_mapper_con.main_orders[leg_id]["target_value"] = 0.8
 
-
             # ============================================================
             # PHASE 1: ORDER SUBMISSION (at entry time)
             # ============================================================
             if current_time.time() >= self.entry_time.time() and not self.initial_entry:
                 logger.info(f"Submitting orders at {current_time.time()}")
                 # spot_price = ((prev_day_df["Low"].min() + prev_day_df["High"].max())/2)
-                
+
                 # Submit all main leg orders
                 for leg_id, order in self.order_sequence_mapper_con.main_orders.items():
                     try:
@@ -540,24 +567,24 @@ class DayProcessor:
                             timestamp=current_time,
                             spot_price=spot_price
                         )
-                        
+
                         if order_id:
                             logger.info(f"Submitted order: {order_id} for {leg_id}")
                         else:
                             logger.warning(f"Failed to submit order for {leg_id}")
-                            
+
                     except Exception as e:
                         logger.error(f"Error submitting order for {leg_id}: {e}")
                         self.day_breaker = True
                         break
-                
+
                 self.initial_entry = True
-                
+
                 # Log statistics
                 stats = self.entry_manager.get_statistics()
                 logger.info(f"Pending orders: {stats['pending_count']}")
                 logger.info(f"By strategy: {stats['pending_by_strategy']}")
-            
+
             # ============================================================
             # PHASE 2: EXECUTE PENDING ORDERS (every minute)
             # ============================================================
@@ -569,20 +596,21 @@ class DayProcessor:
                         TRADE_DICT=self.TRADE_DICT,
                         order_book=self.order_book
                     )
-                    
+
                     # Update instance variables
                     self.TRADE_DICT = TRADE_DICT
                     self.order_book = order_book
-                    
+
                     # If orders were executed, create positions
                     if executed_ids:
                         logger.info(f"Executed {len(executed_ids)} orders at {current_time.time()}")
-                        
+
                         for order_id in executed_ids:
                             # Find the index of this execution in TRADE_DICT
                             # (newly executed orders are at the end)
-                            position_idx = len(self.TRADE_DICT['Leg_id']) - len(executed_ids) + executed_ids.index(order_id)
-                            
+                            position_idx = len(self.TRADE_DICT['Leg_id']) - len(executed_ids) + executed_ids.index(
+                                order_id)
+
                             # Get leg_id and order
                             executed_leg_id = self.TRADE_DICT['Leg_id'][position_idx]
                             leg_order = self.order_sequence_mapper_con._get_order(executed_leg_id)
@@ -592,7 +620,7 @@ class DayProcessor:
                             #     continue
                             # elif leg_order["option_type"] == "CE" and spot_price > spot_df[0]["Open"][0]:
                             #     continue
-                            
+
                             # Create position in PNL Manager
                             self.pnl_manager.create_position(
                                 leg_id=executed_leg_id,
@@ -603,7 +631,8 @@ class DayProcessor:
                                 expiry=self.TRADE_DICT['Expiry_type'][position_idx],
                                 entry_timestamp=self.TRADE_DICT['Entry_timestamp'][position_idx],
                                 entry_price=self.TRADE_DICT['Entry_price'][position_idx],
-                                quantity=self.TRADE_DICT['Lot_size'][position_idx] * self.entry_manager.config['lotsize'],
+                                quantity=self.TRADE_DICT['Lot_size'][position_idx] * self.entry_manager.config[
+                                    'lotsize'],
                                 position_type=self.TRADE_DICT['Position_type'][position_idx],
                                 leg_dict=leg_order,
                                 sl_value=self.TRADE_DICT['Stop_loss'][position_idx],
@@ -611,12 +640,12 @@ class DayProcessor:
                             )
 
                             logger.info(f"Created position for {executed_leg_id}")
-                            
+
                 except Exception as e:
                     logger.error(f"Error executing pending entries: {e}")
                     self.day_breaker = True
                     break
-            
+
             # ============================================================
             # RECORD SNAPSHOT
             # ============================================================
@@ -625,47 +654,51 @@ class DayProcessor:
 
             ### Exiting day early when there is nothing to execute ###
             if self.entry_para_dict["condition_checker_toggle"]:
-                if len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(self.entry_manager.pending_orders) == 0:
+                if len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(
+                        self.entry_manager.pending_orders) == 0:
                     if self.entry_para_dict["condition_type"] == "RSI_EXECUTION":
                         if not self.rsi_executor_con.rsi_execution:
                             self.day_breaker = True
                     else:
                         self.day_breaker = True
             else:
-                if len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(self.entry_manager.pending_orders) == 0:
+                if len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(
+                        self.entry_manager.pending_orders) == 0:
                     self.day_breaker = True
-            
+
             # ============================================================
             # EXIT TIME CHECK
             # ============================================================
             if current_time.time() >= self.exit_time.time() or self.day_breaker:
                 logger.info("Strategy exit time reached. Exiting day loop.")
 
-
-
-
                 # Closing all the standing position as engine running on intraday setup
-                if len(self.pnl_manager.active_positions) > 0:  
+                if len(self.pnl_manager.active_positions) > 0:
                     # Check stop loss for all active positions
                     standing_positions_list = list(self.pnl_manager.active_positions.values())
                     for standing_position in standing_positions_list:
-                        summary = f"{'Exit time'if current_time.time() >= self.exit_time.time() else 'Day breaker flag'} triggered for leg {standing_position.unique_leg_id} closing position at ltp of {standing_position.current_ltp}"
+                        summary = f"{'Exit time' if current_time.time() >= self.exit_time.time() else 'Day breaker flag'} triggered for leg {standing_position.unique_leg_id} closing position at ltp of {standing_position.current_ltp}"
                         exit_price = standing_position.current_ltp
-                        logger.info(f"Exit time of day breaker for position {standing_position.leg_id} at {current_time}")
-                        self.pnl_manager.close_position(position_id=standing_position.position_id, exit_timestamp=current_time,
+                        logger.info(
+                            f"Exit time of day breaker for position {standing_position.leg_id} at {current_time}")
+                        self.pnl_manager.close_position(position_id=standing_position.position_id,
+                                                        exit_timestamp=current_time,
                                                         exit_price=exit_price, exit_reason=summary)
 
                 ## Creatng per day plotting ###
                 if self.entry_para_dict["trade_plotting"]:
                     order_book_df = self.pnl_manager.get_order_book_frame()
-                    plotter = ProfessionalTradeAnalystPlotter(order_book_df.to_pandas(), spot_df.to_pandas(), prev_day_df.to_pandas(), self.entry_para_dict['strategy_name'])
-                    plotter_save_path = self.strategy_save_dir / "Spot_Plot" / f'{(self.entry_para_dict["indices"]+"_"+current_time.strftime("%Y_%m_%d"))}.html'
+                    plotter = ProfessionalTradeAnalystPlotter(order_book_df.to_pandas(), spot_df.to_pandas(),
+                                                              prev_day_df.to_pandas(),
+                                                              self.entry_para_dict['strategy_name'])
+                    plotter_save_path = self.strategy_save_dir / "Spot_Plot" / f'{(self.entry_para_dict["indices"] + "_" + current_time.strftime("%Y_%m_%d"))}.html'
                     plotter.plot_professional_analysis(plotter_save_path)
 
                 if (len(self.pnl_manager.active_positions) + len(self.pnl_manager.closed_positions)) > 5:
-                    print("*"*50)
-                    print("Total position of today", len(self.pnl_manager.active_positions) + len(self.pnl_manager.closed_positions))
-                    print("*"*50)
+                    print("*" * 50)
+                    print("Total position of today",
+                          len(self.pnl_manager.active_positions) + len(self.pnl_manager.closed_positions))
+                    print("*" * 50)
 
                 # Save day file
                 self.pnl_manager.day_file_creator(
@@ -674,32 +707,36 @@ class DayProcessor:
                 )
                 break
 
-
             # ============================================================
             # MTM STOPLOSS CHECK
             # ============================================================
-            if self.entry_para_dict['mtm_stoploss_toggle'] and (-self.entry_para_dict['main_mtm_stoploss']) > self.pnl_manager.get_total_pnl().get('total_pnl', 0):
+            if self.entry_para_dict['mtm_stoploss_toggle'] and (
+            -self.entry_para_dict['main_mtm_stoploss']) > self.pnl_manager.get_total_pnl().get('total_pnl', 0):
                 # Closing all the standing position as engine running on intraday setup
-                if len(self.pnl_manager.active_positions) > 0:  
+                if len(self.pnl_manager.active_positions) > 0:
                     # Check stop loss for all active positions
                     standing_positions_list = list(self.pnl_manager.active_positions.values())
                     for standing_position in standing_positions_list:
                         summary = f"MTM Stoploss Exit triggered for leg {standing_position.unique_leg_id} closing position at ltp of {standing_position.current_ltp}"
                         exit_price = standing_position.current_ltp
                         logger.info(f"MTM Stoploss for position {standing_position.leg_id} at {current_time}")
-                        self.pnl_manager.close_position(position_id=standing_position.position_id, exit_timestamp=current_time,
+                        self.pnl_manager.close_position(position_id=standing_position.position_id,
+                                                        exit_timestamp=current_time,
                                                         exit_price=exit_price, exit_reason=summary)
 
                 ### Creatng per day plotting ###
                 if self.entry_para_dict["trade_plotting"]:
                     order_book_df = self.pnl_manager.get_order_book_frame()
-                    plotter = ProfessionalTradeAnalystPlotter(order_book_df.to_pandas(), spot_df.to_pandas(), prev_day_df.to_pandas(), self.entry_para_dict['strategy_name'])
-                    plotter_save_path = self.strategy_save_dir / "Spot_Plot" / f'{(self.entry_para_dict["indices"]+"_"+current_time.strftime("%Y_%m_%d"))}.html'
+                    plotter = ProfessionalTradeAnalystPlotter(order_book_df.to_pandas(), spot_df.to_pandas(),
+                                                              prev_day_df.to_pandas(),
+                                                              self.entry_para_dict['strategy_name'])
+                    plotter_save_path = self.strategy_save_dir / "Spot_Plot" / f'{(self.entry_para_dict["indices"] + "_" + current_time.strftime("%Y_%m_%d"))}.html'
                     plotter.plot_professional_analysis(plotter_save_path)
 
                 if (len(self.pnl_manager.active_positions) + len(self.pnl_manager.closed_positions)) > 5:
                     print("*" * 50)
-                    print("Total position of today",len(self.pnl_manager.active_positions) + len(self.pnl_manager.closed_positions))
+                    print("Total position of today",
+                          len(self.pnl_manager.active_positions) + len(self.pnl_manager.closed_positions))
                     print("*" * 50)
                 # Save day file
                 self.pnl_manager.day_file_creator(

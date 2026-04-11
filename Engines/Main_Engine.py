@@ -25,7 +25,7 @@ from Utilities.Helper_functions import get_expiry_days_offset
 from Utilities.Legs_generator import LegsHandler
 from Utilities.drawdown_calculation import drawdown_cal
 from Utilities.heat_map import heat_map
-from Utilities.Day_Processor import DayProcessor
+from Utilities.Day_Processor_Conditional import DayProcessor
 from Managers.options_data_manager import DayOptionFrame
 from Database_manager.data_extractor import MonthlyParquetBuilder
 from Managers.EOD_file_manager import EODFileManager
@@ -33,8 +33,8 @@ import time
 from Utilities.build_tradelog_full import generate_trade_logs
 start_time = time.time()
 ### Parameters Loading Section ###
-param_csv_file = sys.argv[1].replace("\\", "/")
-# param_csv_file = r"D:\Development\Coding_Projects\market_project\Backtest_Engine\strategies\sm_normal_full_execution_with gate6\entry_parameter_0120_0326_0916_1527_nifty.csv".replace("\\", "/")
+# param_csv_file = sys.argv[1].replace("\\", "/")
+param_csv_file = r"D:\Development\Coding_Projects\market_project\Backtest_Engine\strategies\momentum_execution\entry_parameter_0426_0426_0916_1529_nifty.csv".replace("\\", "/")
 param_csv_file_dir = ("/").join(param_csv_file.split("/")[:-1])
 entry_para_dict = _load_engine_main_entry_parameters(load_parameters_from_csv(param_csv_file))
 

@@ -31,6 +31,7 @@ from Utilities.Indicator_generator import IndicatorGenerator
 from Managers.entry_manager.entry_manager import EntryManager
 from Visualization.trade_plotter import ProfessionalTradeAnalystPlotter
 from Conditional_Execution.RSI_Execution import RSIExecution
+from Conditional_Execution.MomentumExecution import MomentumExecution
 
 
 class DayProcessor:
@@ -78,6 +79,10 @@ class DayProcessor:
             "%Y-%m-%d %H:%M:%S"
         )
 
+        # Engine flags
+        self.initial_entry = False
+        self.overall_tp_activated = False
+
         # Store entry parameters
         self.entry_para_dict = entry_para_dict
 
@@ -92,6 +97,13 @@ class DayProcessor:
         if self.entry_para_dict["condition_checker_toggle"] and self.entry_para_dict[
             "condition_type"] == "RSI_EXECUTION":
             self.rsi_executor_con = RSIExecution()
+        elif self.entry_para_dict["condition_checker_toggle"] and self.entry_para_dict[
+            "condition_type"] == "MOMENTUM_EXECUTION":
+            momentum_percentage = self.entry_para_dict.get("momentum_percentage", 5.0)
+            indices = self.entry_para_dict.get("indices", "NIFTY")
+            base = self.entry_para_dict.get("base_symbol_spread", 50)
+            self.momentum_executor_con = MomentumExecution(momentum_percentage=momentum_percentage, indices=indices, base=base)
+            self.initial_entry = True
 
         # Trade dictionary
         self.TRADE_DICT = {
@@ -138,9 +150,6 @@ class DayProcessor:
         self.day_breaker = False
         self.entry_spot = None
 
-        # Engine flags
-        self.initial_entry = False
-        self.overall_tp_activated = False
 
         self.orders = {}
         self.lazy_leg_dict = {}
@@ -286,6 +295,7 @@ class DayProcessor:
         for timestamp in spot_df['Timestamp']:
             current_time = timestamp
             spot_price = spot_df.filter(pl.col('Timestamp') == timestamp).select('Close').item()
+            current_spot_row =  spot_df.filter(pl.col('Timestamp') == timestamp)
 
             try:
                 vix_value = vix_df.filter(pl.col('Timestamp') == timestamp).select('Close').item()
@@ -510,6 +520,40 @@ class DayProcessor:
                     self.rsi_executor_con.reset()
                     once_execution -= 1
 
+            elif self.entry_para_dict["condition_checker_toggle"] and self.entry_para_dict[
+                "condition_type"] == "MOMENTUM_EXECUTION":
+                # ============================================================
+                # PHASE Additional: When all orders ends and no standing positions reexecute positions once again by momentum execution
+                # ============================================================
+                if (len(self.pnl_manager.active_positions) == 0 and self.initial_entry and current_time.time() >= self.entry_time.time()):
+                    if not self.momentum_executor_con.momentum_execution:
+                        self.momentum_executor_con.momentum_execution = True
+
+                    if self.momentum_executor_con.momentum_execution:
+                        if self.momentum_executor_con.executor(
+                            order_sequence_mapper=self.order_sequence_mapper_con,
+                            options_extractor=self.day_option_frame_con,
+                            spot_df=spot_df,
+                            current_timestamp=current_time
+                        ):
+                            self.entry_manager.pending_orders = {}
+                            logger.info(f"Momentum Condition Triggered for re-execution at {current_time.time()}")
+                            self.momentum_executor_con.momentum_execution = False
+                            self.entry_time = current_time
+                            self.initial_entry = False
+                            self.second_phase = True
+
+                            for leg_id, order in self.order_sequence_mapper_con.main_orders.items():
+                                self.order_sequence_mapper_con.main_orders[leg_id]["stoploss_value"] = \
+                                self.entry_para_dict["re_execute_sl"] / 100
+                                self.order_sequence_mapper_con.main_orders[leg_id]["target_value"] = \
+                                self.entry_para_dict["re_execute_target"] / 100
+
+                elif self.momentum_executor_con.momentum_execution and len(self.pnl_manager.active_positions) == 1 and (
+                        len(self.pnl_manager.closed_positions) >= 2):
+                    self.momentum_executor_con.reset()
+                    once_execution -= 1
+
             else:
                 # ============================================================
                 # PHASE Additional: When all orders ends and no standing positions reexecute positions once again (Single time per day)
@@ -616,10 +660,6 @@ class DayProcessor:
                             leg_order = self.order_sequence_mapper_con._get_order(executed_leg_id)
                             # leg_order = self.orders[executed_leg_id]
 
-                            # if leg_order["option_type"] == "PE" and spot_price < spot_df[0]["Open"][0]:
-                            #     continue
-                            # elif leg_order["option_type"] == "CE" and spot_price > spot_df[0]["Open"][0]:
-                            #     continue
 
                             # Create position in PNL Manager
                             self.pnl_manager.create_position(
@@ -654,13 +694,17 @@ class DayProcessor:
 
             ### Exiting day early when there is nothing to execute ###
             if self.entry_para_dict["condition_checker_toggle"]:
-                if len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(
-                        self.entry_manager.pending_orders) == 0:
-                    if self.entry_para_dict["condition_type"] == "RSI_EXECUTION":
-                        if not self.rsi_executor_con.rsi_execution:
+                if current_time.time() > self.entry_time.time():
+                    if len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(
+                            self.entry_manager.pending_orders) == 0:
+                        if self.entry_para_dict["condition_type"] == "RSI_EXECUTION":
+                            if not self.rsi_executor_con.rsi_execution:
+                                self.day_breaker = True
+                        elif self.entry_para_dict["condition_type"] == "MOMENTUM_EXECUTION":
+                            if not self.momentum_executor_con.momentum_execution:
+                                self.day_breaker = True
+                        else:
                             self.day_breaker = True
-                    else:
-                        self.day_breaker = True
             else:
                 if len(self.pnl_manager.active_positions) == 0 and self.initial_entry and len(
                         self.entry_manager.pending_orders) == 0:

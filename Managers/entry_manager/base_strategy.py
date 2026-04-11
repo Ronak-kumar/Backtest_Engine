@@ -28,6 +28,7 @@ class OrderSpec:
         timestamp_created: When this order was created
         strategy_type: Type of strategy (IMMEDIATE, MOMENTUM, RANGE_BREAKOUT, etc.)
         strategy_data: Strategy-specific data needed for execution
+        strategy_owner: ID of the strategy that owns this order (for conditional strategies)
     """
     order_id: str
     leg_id: str
@@ -35,6 +36,7 @@ class OrderSpec:
     timestamp_created: datetime
     strategy_type: str
     strategy_data: Dict[str, Any] = field(default_factory=dict)
+    strategy_owner: Optional[str] = None
     
     def __repr__(self) -> str:
         return (
@@ -96,7 +98,8 @@ class EntryStrategy(ABC):
         leg_id: str,
         leg_config: Dict[str, Any],
         timestamp: datetime,
-        spot_price: float
+        spot_price: float,
+        strategy_owner: Optional[str] = None
     ) -> Optional[OrderSpec]:
         """
         PHASE 1: Generate order specification with all data needed for execution.
@@ -113,6 +116,7 @@ class EntryStrategy(ABC):
             leg_config: Leg configuration dictionary
             timestamp: Current timestamp
             spot_price: Current spot price
+            strategy_owner: ID of the strategy that owns this order (optional)
             
         Returns:
             OrderSpec with strategy_data populated, or None if cannot create

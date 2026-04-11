@@ -30,7 +30,8 @@ class MomentumEntryStrategy(EntryStrategy):
         leg_id: str,
         leg_config: Dict[str, Any],
         timestamp: datetime,
-        spot_price: float
+        spot_price: float,
+        strategy_owner: Optional[str] = None
     ) -> Optional[OrderSpec]:
         """
         Generate order spec with momentum threshold.
@@ -102,7 +103,8 @@ class MomentumEntryStrategy(EntryStrategy):
                 leg_config=leg_config,
                 timestamp_created=timestamp,
                 strategy_type='MOMENTUM',
-                strategy_data=strategy_data
+                strategy_data=strategy_data,
+                strategy_owner=strategy_owner
             )
             
             self._log(

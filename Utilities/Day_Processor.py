@@ -31,6 +31,7 @@ from Utilities.Indicator_generator import IndicatorGenerator
 from Managers.entry_manager.entry_manager import EntryManager
 from Visualization.trade_plotter import ProfessionalTradeAnalystPlotter
 from Conditional_Execution.RSI_Execution import RSIExecution
+from Utilities.Strategy import StrategyRegistry, StrategyContext, RSIExecutionStrategy
 
 
 class DayProcessor:
@@ -88,6 +89,10 @@ class DayProcessor:
         self.pnl_manager = PNLManager()
         self.reentry_manager = ReentryManager()
         self.inicator_generator = None
+
+        # Initialize strategy registry
+        self.strategy_registry = StrategyRegistry(self)
+        self._register_strategy_classes()
 
         if self.entry_para_dict["condition_checker_toggle"] and self.entry_para_dict["condition_type"] == "RSI_EXECUTION":
             self.rsi_executor_con = RSIExecution()
@@ -156,6 +161,22 @@ class DayProcessor:
         for expiry_type in self.expiry_types:
             intraday_options_df[expiry_type] = pl.DataFrame()
         self.day_option_frame_con.intraday_options_df = intraday_options_df
+
+    def _register_strategy_classes(self):
+        """Register available strategy classes."""
+        self.strategy_registry.register_strategy_class('RSI_EXECUTION', RSIExecutionStrategy)
+
+    def _initialize_strategies(self):
+        """Initialize selected strategies based on config."""
+        selected_strategies = []
+        if self.entry_para_dict.get("condition_checker_toggle", False):
+            condition_type = self.entry_para_dict.get("condition_type", "")
+            if condition_type:
+                selected_strategies.append({
+                    'type': condition_type,
+                    'config': self.entry_para_dict.get("strategy_params", {})
+                })
+        self.strategy_registry.initialize_strategies(selected_strategies)
 
 
     def _initialize_entry_manager(
@@ -267,6 +288,26 @@ class DayProcessor:
             # if self.entry_para_dict["condition_checker_toggle"] and self.entry_para_dict["condition_type"] == "RSI_EXECUTION":
             self.indicator_generator = IndicatorGenerator(current_day_df=spot_df.to_pandas(), prev_day_df=prev_day_df.to_pandas(), strategy_save_dir =self.strategy_save_dir)
             spot_df = self.indicator_generator.generate_indicators()
+
+            # Initialize strategies
+            self._initialize_strategies()
+
+        # Create initial context for on_day_start
+        initial_context = StrategyContext(
+            current_time=spot_df[0]["Timestamp"][0],
+            spot_price=spot_df[0]["Close"][0],
+            vix_value=vix_df[0]["Close"][0] if len(vix_df) > 0 else 0,
+            executed_orders=[],
+            closed_positions=[],
+            triggered_positions=[],
+            main_orders=self.order_sequence_mapper_con.main_orders,
+            pending_orders=self.entry_manager.pending_orders,
+            active_positions=self.pnl_manager.active_positions,
+            day_processor=self
+        )
+
+        # Call on_day_start for all strategies
+        self.strategy_registry.call_on_day_start(initial_context)
 
         once_execution = self.entry_para_dict["re_execution_times"]
         directional_processing = self.entry_para_dict["directional_execution"]
@@ -518,6 +559,24 @@ class DayProcessor:
                     break
             
             # ============================================================
+            # STRATEGY ON_BAR CALL
+            # ============================================================
+            # Create context for strategies
+            bar_context = StrategyContext(
+                current_time=current_time,
+                spot_price=spot_price,
+                vix_value=vix_value,
+                executed_orders=list(self.TRADE_DICT['Leg_id'][-len(executed_ids):]) if 'executed_ids' in locals() and executed_ids else [],
+                closed_positions=list(self.pnl_manager.closed_positions.keys()),
+                triggered_positions=[],  # Could populate with triggered exits
+                main_orders=self.order_sequence_mapper_con.main_orders,
+                pending_orders=self.entry_manager.pending_orders,
+                active_positions=self.pnl_manager.active_positions,
+                day_processor=self
+            )
+            self.strategy_registry.call_on_bar(bar_context)
+            
+            # ============================================================
             # RECORD SNAPSHOT
             # ============================================================
             if len(self.pnl_manager.active_positions) > 0 or len(self.pnl_manager.closed_positions) > 0:
@@ -604,3 +663,18 @@ class DayProcessor:
                     strategy_save_dir=self.strategy_save_dir
                 )
                 break
+
+        # Call on_day_end for all strategies after the day loop
+        end_context = StrategyContext(
+            current_time=current_time if 'current_time' in locals() else spot_df[-1]["Timestamp"][0],
+            spot_price=spot_price if 'spot_price' in locals() else spot_df[-1]["Close"][0],
+            vix_value=vix_value if 'vix_value' in locals() else (vix_df[-1]["Close"][0] if len(vix_df) > 0 else 0),
+            executed_orders=list(self.TRADE_DICT['Leg_id']),
+            closed_positions=list(self.pnl_manager.closed_positions.keys()),
+            triggered_positions=[],
+            main_orders=self.order_sequence_mapper_con.main_orders,
+            pending_orders=self.entry_manager.pending_orders,
+            active_positions=self.pnl_manager.active_positions,
+            day_processor=self
+        )
+        self.strategy_registry.call_on_day_end(end_context)

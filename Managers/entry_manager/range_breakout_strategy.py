@@ -30,7 +30,8 @@ class RangeBreakoutStrategy(EntryStrategy):
         leg_id: str,
         leg_config: Dict[str, Any],
         timestamp: datetime,
-        spot_price: float
+        spot_price: float,
+        strategy_owner: Optional[str] = None
     ) -> Optional[OrderSpec]:
         """
         Generate order spec with range breakout threshold.
@@ -102,7 +103,8 @@ class RangeBreakoutStrategy(EntryStrategy):
                 leg_config=leg_config,
                 timestamp_created=timestamp,
                 strategy_type='RANGE_BREAKOUT',
-                strategy_data=strategy_data
+                strategy_data=strategy_data,
+                strategy_owner=strategy_owner
             )
             
             self._log(

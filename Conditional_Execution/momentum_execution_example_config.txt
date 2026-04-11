@@ -1,0 +1,30 @@
+# Example configuration for Momentum Execution condition
+# Add these parameters to your entry_parameter_*.csv file
+
+# Enable conditional execution
+condition_checker_toggle,True
+
+# Set condition type to momentum execution
+condition_type,MOMENTUM_EXECUTION
+
+# Set the momentum percentage threshold (when ALL legs drop below this percentage from their entry prices, execute)
+momentum_percentage,5.0
+
+# Index name (NIFTY, BANKNIFTY, etc.)
+indices,NIFTY
+
+# Base symbol spread for strike calculations (50 for NIFTY, 100 for BANKNIFTY, etc.)
+base_symbol_spread,50
+
+# Re-execution stop loss and target (as percentage)
+re_execute_sl,20
+re_execute_target,50
+
+# Other required parameters...
+# (copy from your existing strategy configuration)
+
+# How it works:
+# 1. At strategy start time, captures entry prices for ALL configured legs using standard strike calculations
+# 2. During trading, continuously monitors price decay of ALL legs using current recalculated strikes
+# 3. Triggers re-execution when ALL legs have dropped >= momentum_percentage from their initial entry prices
+# 4. Uses standard base strategy methods (_calculate_strike and _get_option_row) for consistency

@@ -27,7 +27,8 @@ class ImmediateEntryStrategy(EntryStrategy):
         leg_id: str,
         leg_config: Dict[str, Any],
         timestamp: datetime,
-        spot_price: float
+        spot_price: float,
+        strategy_owner: Optional[str] = None
     ) -> Optional[OrderSpec]:
         """
         Generate order spec with all data for immediate execution.
@@ -80,7 +81,8 @@ class ImmediateEntryStrategy(EntryStrategy):
                 leg_config=leg_config,
                 timestamp_created=timestamp,
                 strategy_type='IMMEDIATE',
-                strategy_data=strategy_data
+                strategy_data=strategy_data,
+                strategy_owner=strategy_owner
             )
             
             self._log(

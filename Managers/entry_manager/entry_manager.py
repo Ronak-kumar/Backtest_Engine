@@ -183,7 +183,8 @@ class EntryManager:
                 leg_id=leg_id,
                 leg_config=leg_config,
                 timestamp=timestamp,
-                spot_price=spot_price
+                spot_price=spot_price,
+                strategy_owner=leg_config.get('strategy_owner')
             )
             
             if order_spec is None:
